@@ -44,6 +44,9 @@
     "packages/ai-client": {
       "ignoreDependencies": ["@standard-schema/spec"]
     },
+    "packages/ai-memory": {
+      "ignoreDependencies": ["ioredis", "redis"]
+    },
     "packages/ai-sandbox": {
       "ignoreDependencies": ["@ngrok/ngrok"]
     },
