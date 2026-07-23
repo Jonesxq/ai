@@ -63,7 +63,10 @@ export type {
 export { reconstructChat } from './reconstruct'
 export type { ReconstructChatOptions } from './reconstruct'
 
-// Reference in-memory implementation (state stores only)
+// Server helpers: retrieve a persisted generation artifact + its bytes
+export { retrieveArtifact, retrieveBlob, artifactBlobKey } from './retrieve'
+
+// Reference in-memory implementation (state stores + generation media)
 export { memoryPersistence } from './memory'
 
 // Interrupt controller
