@@ -93,7 +93,9 @@ values arrive from untyped JavaScript.
 
 To define a partial backend directly rather than by composing, use
 `defineAIPersistence({ stores: { ... } })` and pass only the stores you have.
-See [Custom stores](./custom-stores) for the store contracts.
+See the
+[store interface reference](./build-your-own-adapter#store-interface-reference)
+for the store contracts.
 
 ## Locks (coordination)
 

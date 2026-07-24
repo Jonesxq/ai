@@ -13,8 +13,10 @@ thread.
 
 ## Persist state on the server
 
-Add the middleware to `chat()` and point it at a backend. Here it is a local
-SQLite file via the Drizzle backend:
+Add the middleware to `chat()` and point it at a backend. Here `persistence` is a
+local `./persistence` module: an adapter you build on the core over the database
+you already run. [Build your own adapter](./build-your-own-adapter) walks through
+a complete SQLite version end to end.
 
 ```ts group=chat-persistence
 import {
@@ -24,12 +26,7 @@ import {
 } from '@tanstack/ai'
 import { openaiText } from '@tanstack/ai-openai'
 import { withPersistence } from '@tanstack/ai-persistence'
-import { sqlitePersistence } from '@tanstack/ai-persistence-drizzle/sqlite'
-
-// One store for the whole process. Stock defaults + runtime table bootstrap.
-const persistence = sqlitePersistence({
-  url: 'file:.data/chat.sqlite',
-})
+import { persistence } from './persistence'
 
 export async function POST(request: Request) {
   const params = await chatParamsFromRequestBody(await request.json())
@@ -57,9 +54,9 @@ flags. `messages` is required; the rest are optional:
 Cross-worker locks are **not** part of this middleware — add `withLocks` when
 other middleware needs multi-instance coordination.
 
-The `/sqlite` factory bootstraps stock tables for local development. In
-production, emit a schema with `tanstack-ai-drizzle-schema` and migrate via
-your own drizzle-kit journal. See [Migrations](./migrations).
+Creating tables on open is convenient for local development. In production, apply
+schema changes through your deployment workflow instead. See
+[Migrations](./migrations).
 
 ## Send the full transcript, or none of it
 
@@ -118,6 +115,6 @@ successful interrupt or finish boundary.
 
 - Bring durability to the browser too, so a full page reload restores the
   conversation and rejoins an in-flight run: [Client persistence](./client-persistence).
-- Pick a backend: [Drizzle](./drizzle), [Prisma](./prisma),
-  [Cloudflare](./cloudflare), or [your own store](./custom-stores).
+- Build the backend on the core, and look up the store contracts:
+  [Build your own adapter](./build-your-own-adapter).
 - Choose which stores to run: [Controls](./controls).

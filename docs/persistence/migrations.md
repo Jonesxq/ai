@@ -5,101 +5,54 @@ id: migrations
 
 # Persistence Migrations
 
-Migration ownership depends on the backend. Apply schema changes before
-deploying code that reads or writes the corresponding stores.
+Your adapter owns its schema. TanStack AI never inspects your tables, so you
+decide the table layout and how schema changes are applied. Apply those changes
+before deploying code that reads or writes the corresponding stores.
 
-## Drizzle SQLite
+## Create tables on open, for local development
 
-The Drizzle package is **schema-first** and does **not** ship SQL migrations.
-Own the schema in your project, then generate DDL with drizzle-kit:
-
-```bash
-pnpm exec tanstack-ai-drizzle-schema --out src/db
-```
-
-Point drizzle-kit at the emitted file, generate, and migrate:
+A hand-rolled adapter can create its tables the first time it opens the database.
+The SQLite example in [Build your own adapter](./build-your-own-adapter) does this
+behind a `migrate` flag with `CREATE TABLE IF NOT EXISTS`, so it is idempotent:
 
 ```ts ignore
-import { defineConfig } from 'drizzle-kit'
+import { sqlitePersistence } from './sqlite-persistence'
 
-export default defineConfig({
-  dialect: 'sqlite',
-  schema: ['./src/db/schema.ts', './src/db/tanstack-ai-schema.ts'],
-  out: './drizzle',
+const persistence = sqlitePersistence({
+  url: 'file:.data/state.sqlite',
+  migrate: true,
 })
 ```
 
-```bash
-pnpm exec drizzle-kit generate
-pnpm exec drizzle-kit migrate
-```
+This is convenient for local development and tests. Avoid request-time migrations
+in production.
 
-Pass the schema into the runtime:
+## Apply migrations in production
 
-```ts
-import { drizzlePersistence } from '@tanstack/ai-persistence-drizzle'
-import { schema } from './db/tanstack-ai-schema'
-import { db } from './db'
+In production, run schema changes through your normal deployment workflow, not on
+first request. Keep the DDL for the four tables (`messages`, `runs`,
+`interrupts`, `metadata`) in a versioned migration and apply it with the same
+tool you use for the rest of your database, before the new code ships.
 
-export const persistence = drizzlePersistence(db, {
-  provider: 'sqlite',
-  schema,
-})
-```
+If you build the adapter with an ORM or query builder, let that tool own the
+migration journal. A Drizzle schema drives `drizzle-kit`; a Prisma models
+fragment drives `prisma migrate`; a raw SQL adapter checks in plain `.sql` files.
+The adapter-building skills in `@tanstack/ai-persistence` cover each of these
+workflows.
 
-For local Node development without a kit journal yet, the `/sqlite` factory can
-bootstrap stock tables at runtime (`ensureTables`, default `true`). That is not
-a migration system — see [Drizzle](./drizzle).
+## An existing schema owns its own migrations
 
-## Cloudflare D1
-
-D1 is SQLite. Use the same **schema-first Drizzle** workflow as above — this
-package does **not** ship D1 SQL.
-
-1. Re-export `@tanstack/ai-persistence-drizzle/sqlite-schema` or emit a starter
-   with `tanstack-ai-drizzle-schema`.
-2. Generate migrations with drizzle-kit (`dialect: 'sqlite'`).
-3. Point Wrangler `d1_databases[].migrations_dir` at that journal and apply:
-
-```bash
-wrangler d1 migrations apply tanstack-ai-state --local
-wrangler d1 migrations apply tanstack-ai-state --remote
-```
-
-Runtime: `cloudflarePersistence({ d1 })` (stock schema) or
-`drizzlePersistence(drizzle(d1, { schema }), { provider: 'sqlite', schema })`
-for a project-owned schema. See [Cloudflare](./cloudflare).
-
-Durable Object **locks** do not use the D1 table journal — configure their
-bindings and Durable Object migration tags in Wrangler separately.
-
-## Prisma
-
-Prisma ships a provider-neutral models fragment, then delegates SQL generation
-to your application:
-
-```bash
-pnpm exec tanstack-ai-prisma-models --out prisma/schema
-pnpm prisma migrate dev --name add-tanstack-ai-persistence
-pnpm prisma generate
-pnpm prisma migrate deploy
-```
-
-The copied fragment contains no datasource or generator. Keep those in your
-application schema and commit the native migration Prisma creates for your
-provider.
-
-## Custom stores
-
-Custom `AIPersistence` adapters own their schema and migrations entirely.
-Maintain compatibility with the public store records and method semantics;
-TanStack AI does not inspect your table layout.
+If you map the store contracts onto tables you already have (see
+[Build your own adapter](./build-your-own-adapter#existing-database-map-the-contracts-onto-your-schema)),
+those tables are part of your application schema, and your existing migration tool
+already owns them. Add the columns the stores need in a normal migration. Keep any
+extra app-owned columns nullable or defaulted so the stores' inserts still
+succeed.
 
 ## Upgrade discipline
 
-1. Read the package release notes for schema contract changes.
-2. Refresh emitted schema / models fragments in a reviewable branch.
-3. Inspect the drizzle-kit or Prisma diff rather than forcing overwrites.
-4. Back up production state where required.
-5. Apply migrations before deploying code that depends on them.
-6. Keep rollback and partial-deployment behavior explicit.
+1. Keep the DDL for the store tables in a reviewable migration, not inline in
+   request handlers.
+2. Back up production state where required.
+3. Apply migrations before deploying code that depends on them.
+4. Keep rollback and partial-deployment behavior explicit.

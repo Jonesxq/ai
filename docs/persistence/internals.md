@@ -105,15 +105,12 @@ explicitly widened types can bypass static guarantees.
 
 ## Backend ownership
 
-Packaged backends own resources differently:
-
-- Drizzle is schema-first: pass a required `schema` (emit via CLI; your
-  drizzle-kit owns migrations). The root import is edge-safe. The `/sqlite`
-  entry creates a Node SQLite connection with stock defaults.
-- Prisma accepts the application's generated and migrated client.
-- Cloudflare is a thin D1 convenience over Drizzle SQLite (`drizzle-orm/d1`);
-  schema DDL is owned the same way as Drizzle. Durable Object locks are a
-  separate export (`createDurableObjectLockStore` + `withLocks`).
+An adapter owns its own resources: connection lifecycle, when migrations run, and
+how each store record maps to rows. The middleware only calls the store methods;
+it never opens a connection or inspects a table. A backend may provide any subset
+of the stores (for example, no `locks`), and the return type reflects exactly the
+stores it exposes. [Build your own adapter](./build-your-own-adapter) shows this
+end to end for SQLite.
 
 `composePersistence` does not add distributed transactions. When related
 stores use different systems, adapter authors must define retry,

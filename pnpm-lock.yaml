@@ -885,9 +885,6 @@ importers:
       '@tanstack/ai-persistence':
         specifier: workspace:*
         version: link:../../packages/ai-persistence
-      '@tanstack/ai-persistence-drizzle':
-        specifier: workspace:*
-        version: link:../../packages/ai-persistence-drizzle
       '@tanstack/ai-react':
         specifier: workspace:*
         version: link:../../packages/ai-react

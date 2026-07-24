@@ -374,9 +374,11 @@ You can learn more about all of the offerings from TanStack in the [TanStack doc
 A chat that survives a full page reload on both ends. The client writes the
 transcript to `localStorage` (via `localStoragePersistence`), so a reload
 restores the conversation instantly. The server writes the same transcript,
-run records, and interrupt state to SQLite with `withPersistence`
-(`@tanstack/ai-persistence` + the Drizzle SQLite backend), so it survives a
-server restart too — the DB lives at `.data/persistent-chat.db` (gitignored).
+run records, and interrupt state to SQLite with `withPersistence`, so it
+survives a server restart too — the DB lives at `.data/persistent-chat.db`
+(gitignored). The SQLite backend is `src/lib/sqlite-persistence.ts`, a
+self-contained `node:sqlite` store built on the `@tanstack/ai-persistence`
+core store contracts — a worked example of rolling your own adapter.
 
 Try it: send a message, wait for the reply, then reload the page. The
 conversation is still there. Needs `OPENAI_API_KEY` in `.env`.

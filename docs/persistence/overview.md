@@ -38,7 +38,7 @@ Persistence runs on the client, the server, or both. They are independent, and t
 | Half | Stores | Survives | Use it for |
 | --- | --- | --- | --- |
 | **Client** ([Client persistence](./client-persistence)) | the transcript + a resume pointer, in `localStorage` / `sessionStorage` / `IndexedDB` | a page reload in that browser | instant restore on reload, SPA / offline apps |
-| **Server** ([Chat persistence](./chat-persistence)) | messages, run status, interrupts, in SQL / D1 / your store | a server restart, and reaches every device | multi-device, audit, durable approvals |
+| **Server** ([Chat persistence](./chat-persistence)) | messages, run status, interrupts, in your own store | a server restart, and reaches every device | multi-device, audit, durable approvals |
 
 ### Identity: `Scope` and `threadId`
 
@@ -56,7 +56,11 @@ string for adapter simplicity; multi-user isolation is still required:
 `Scope` is re-exported from `@tanstack/ai-persistence` so apps can import the
 identity type next to the store contracts.
 
-A minimal server setup adds one middleware to `chat()`:
+A minimal server setup adds one middleware to `chat()`. Here `persistence` comes
+from a local `./persistence` module: a small adapter over a durable store that
+you build on the core in a few lines. See
+[Build your own adapter](./build-your-own-adapter) for a complete SQLite
+implementation you can copy.
 
 ```ts
 import {
@@ -66,11 +70,7 @@ import {
 } from '@tanstack/ai'
 import { openaiText } from '@tanstack/ai-openai'
 import { withPersistence } from '@tanstack/ai-persistence'
-import { sqlitePersistence } from '@tanstack/ai-persistence-drizzle/sqlite'
-
-const persistence = sqlitePersistence({
-  url: 'file:.tanstack-ai/state.sqlite',
-})
+import { persistence } from './persistence'
 
 export async function POST(request: Request) {
   const params = await chatParamsFromRequest(request)
@@ -165,11 +165,7 @@ import {
   reconstructChat,
   withPersistence,
 } from '@tanstack/ai-persistence'
-import { sqlitePersistence } from '@tanstack/ai-persistence-drizzle/sqlite'
-
-const persistence = sqlitePersistence({
-  url: 'file:.tanstack-ai/state.sqlite',
-})
+import { persistence } from './persistence'
 
 export async function POST(request: Request) {
   const params = await chatParamsFromRequest(request)
@@ -279,6 +275,6 @@ and a `LockStore` implementation, not a fifth state store.
 - [Chat persistence](./chat-persistence): the server middleware, the authoritative-history contract, and durable interrupts.
 - [Client persistence](./client-persistence): client reload restore, the `messages` lever, storage backends, and mid-stream rejoin.
 - [Controls](./controls): compose backends per store and choose which stores to run.
-- Backends: [Drizzle](./drizzle), [Prisma](./prisma), [Cloudflare](./cloudflare), or your own [Custom stores](./custom-stores).
+- [Build your own adapter](./build-your-own-adapter): a complete SQLite example on the core, plus the store interface reference.
 - [Resumable streams](../resumable-streams/overview): the delivery-durability layer in full.
 - [Internals](./internals): the middleware lifecycle and composition mechanics behind every backend.
