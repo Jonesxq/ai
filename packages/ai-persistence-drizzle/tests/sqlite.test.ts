@@ -3,8 +3,8 @@ import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createDefaultSqliteSchema } from '../src/default-sqlite-schema'
-import { ensureSqliteTables } from '../src/ensure-sqlite-tables'
+import { createDefaultSqliteSchema } from '../src/sqlite/default-schema'
+import { ensureSqliteTables } from '../src/sqlite/ensure-tables'
 import { sqlitePersistence } from '../src/sqlite'
 
 const temporaryDirectories: Array<string> = []

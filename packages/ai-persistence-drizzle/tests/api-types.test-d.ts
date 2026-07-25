@@ -12,8 +12,8 @@ import {
   drizzlePersistence,
 } from '../src/index'
 import { sqlitePersistence } from '../src/sqlite'
-import { schema as emittedSchema } from '../src/assets/tanstack-ai-schema'
-import { schema as emittedPgSchema } from '../src/assets/tanstack-ai-schema-pg'
+import { schema as emittedSchema } from '../src/sqlite/assets/tanstack-ai-schema'
+import { schema as emittedPgSchema } from '../src/pg/assets/tanstack-ai-schema'
 import { variantSchema } from './variant-schema'
 import type { TanstackAiPgSchema, TanstackAiSqliteSchema } from '../src/index'
 

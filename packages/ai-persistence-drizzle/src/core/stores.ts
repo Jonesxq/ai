@@ -1,12 +1,13 @@
 /**
  * AIPersistence store implementations over a Drizzle database.
  *
- * Written once against the SQLite builder types; the Postgres path re-faces
- * its runtime objects onto these signatures in `drizzlePersistence` (see the
- * comment there). Stores operate on injected table objects from the caller's
- * schema. JSON columns are expected to use Drizzle's json-decoding column
- * types (SQLite `text({ mode: 'json' })`, Postgres `jsonb`) so values decode
- * to the contract data shapes.
+ * Shared, dialect-agnostic query surface: written once against the SQLite
+ * builder types; the Postgres path re-faces its runtime objects onto these
+ * signatures in {@link drizzlePersistence} (see `core/persistence.ts`). Stores
+ * operate on injected table objects from the caller's schema. JSON columns are
+ * expected to use Drizzle's json-decoding column types (SQLite
+ * `text({ mode: 'json' })`, Postgres `jsonb`) so values decode to the contract
+ * data shapes.
  */
 import { and, asc, desc, eq } from 'drizzle-orm'
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core'
@@ -28,6 +29,9 @@ import type { TanstackAiSqliteSchema } from './schema-contract'
  * Typed as the schema-agnostic slice of the query builder we actually use, so a
  * BYO `db` constructed with any `{ schema }` is assignable regardless of its
  * `TFullSchema` (which is invariant on the full `BaseSQLiteDatabase`).
+ *
+ * Postgres databases are re-faced onto this surface at the
+ * {@link drizzlePersistence} boundary — the method set used here is shared.
  */
 export type DrizzleSqliteDb = Pick<
   BaseSQLiteDatabase<'sync' | 'async', unknown>,

@@ -4,8 +4,8 @@
  * The contract itself is dialect-neutral: {@link TanstackAiTableShapes} lists
  * the logical columns and their decoded data shapes, nothing else. Table and
  * column **database names are free**, and any Drizzle dialect can project the
- * shapes into concrete tables — {@link TanstackAiSqliteSchema} is the SQLite
- * projection this package's stores consume today.
+ * shapes into concrete tables — {@link TanstackAiSqliteSchema} /
+ * {@link TanstackAiPgSchema} are the dialect projections the stores consume.
  *
  * `drizzlePersistence` accepts any schema whose tables and columns carry the
  * required data shapes. Emit a starter with `tanstack-ai-drizzle-schema`,
@@ -85,7 +85,7 @@ export type TanstackAiSqliteSchema = {
 
 /**
  * The Postgres projection of {@link TanstackAiTableShapes}: what
- * `pgPersistence` (the `/pg` entry) can operate over. Satisfied by
+ * `drizzlePersistence` can operate over with `provider: 'pg'`. Satisfied by
  * {@link createDefaultPgSchema} and by the file emitted by
  * `tanstack-ai-drizzle-schema --dialect pg`.
  */
@@ -135,7 +135,7 @@ const tableKeys = Object.keys(requiredColumns) as Array<
   keyof TanstackAiTableShapes
 >
 
-/** A user-supplied schema failed the {@link TanstackAiSqliteSchema} contract. */
+/** A user-supplied schema failed the TanStack AI Drizzle schema contract. */
 export class DrizzleSchemaError extends Error {
   constructor(problems: ReadonlyArray<string>) {
     super(

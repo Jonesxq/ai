@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { runDrizzleSchemaCli } from './schema-cli'
+import { runDrizzleSchemaCli } from './core/schema-cli'
 
 try {
   await runDrizzleSchemaCli(process.argv.slice(2))

@@ -30,12 +30,12 @@
       "import": "./dist/esm/sqlite.js"
     },
     "./sqlite-schema": {
-      "types": "./dist/esm/default-sqlite-schema.d.ts",
-      "import": "./dist/esm/default-sqlite-schema.js"
+      "types": "./dist/esm/sqlite/default-schema.d.ts",
+      "import": "./dist/esm/sqlite/default-schema.js"
     },
     "./pg-schema": {
-      "types": "./dist/esm/default-pg-schema.d.ts",
-      "import": "./dist/esm/default-pg-schema.js"
+      "types": "./dist/esm/pg/default-schema.d.ts",
+      "import": "./dist/esm/pg/default-schema.js"
     }
   },
   "bin": {
@@ -44,10 +44,13 @@
   "files": [
     "bin",
     "dist",
-    "src"
+    "src",
+    "scripts"
   ],
   "scripts": {
-    "build": "vite build",
+    "codegen:pg": "node ./scripts/codegen-pg-from-sqlite.ts",
+    "codegen:pg:check": "node ./scripts/codegen-pg-from-sqlite.ts --check",
+    "build": "pnpm codegen:pg && vite build",
     "clean": "premove ./build ./dist",
     "lint:fix": "oxlint src --type-aware --fix",
     "test:build": "publint --strict",

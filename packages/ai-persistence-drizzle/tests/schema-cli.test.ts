@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { drizzleSchemaFilename, drizzleSchemaSource } from '../src/index'
-import { drizzleSchemaSources } from '../src/schema-source'
-import { runDrizzleSchemaCli } from '../src/schema-cli'
+import { drizzleSchemaSources } from '../src/core/schema-source'
+import { runDrizzleSchemaCli } from '../src/core/schema-cli'
 
 const temporaryDirectories: Array<string> = []
 
