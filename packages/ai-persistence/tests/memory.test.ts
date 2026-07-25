@@ -8,13 +8,12 @@ describe('memoryPersistence', () => {
     expect(p.stores.messages).toBeDefined()
     expect(p.stores.runs).toBeDefined()
     expect(p.stores.interrupts).toBeDefined()
-    expect(p.stores.locks).toBeDefined()
+    expect(p.stores.metadata).toBeDefined()
   })
 
-  it('exposes the complete state store set', () => {
+  it('exposes the complete state store set (no locks)', () => {
     expect(Object.keys(memoryPersistence().stores).sort()).toEqual([
       'interrupts',
-      'locks',
       'messages',
       'metadata',
       'runs',
@@ -146,24 +145,6 @@ describe('memoryPersistence', () => {
       await metadata!.set('a', 'b:c', 'right')
       expect(await metadata!.get('a:b', 'c')).toBe('left')
       expect(await metadata!.get('a', 'b:c')).toBe('right')
-    })
-  })
-
-  describe('locks', () => {
-    it('serializes concurrent withLock calls on the same key and drops settled chains', async () => {
-      const { locks } = memoryPersistence().stores
-      const order: Array<number> = []
-      await Promise.all([
-        locks!.withLock('k', async () => {
-          order.push(1)
-          await Promise.resolve()
-          order.push(2)
-        }),
-        locks!.withLock('k', async () => {
-          order.push(3)
-        }),
-      ])
-      expect(order).toEqual([1, 2, 3])
     })
   })
 

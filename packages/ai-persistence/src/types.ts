@@ -1,5 +1,4 @@
 import type { ModelMessage, Scope, TokenUsage } from '@tanstack/ai'
-import type { LockStore } from './locks'
 
 // Re-export the shared identity type so app code can import Scope from either
 // `@tanstack/ai` or `@tanstack/ai-persistence`. See {@link Scope} security notes:
@@ -73,13 +72,19 @@ export interface MessageStore {
 export type RunStatus = 'running' | 'completed' | 'failed' | 'interrupted'
 
 /**
- * A single generation/chat run.
+ * A single **chat** run (one agent turn within a conversation).
+ *
+ * `threadId` is the conversation key ({@link Scope.threadId}) — never a
+ * generation `requestId`. Generation jobs must not reuse this record by
+ * faking `threadId = requestId`; they need a separate job store (see
+ * `withGenerationPersistence` JSDoc).
  *
  * @property startedAt - Epoch ms when the run was first created.
  * @property finishedAt - Epoch ms when the run reached a terminal status.
  */
 export interface RunRecord {
   runId: string
+  /** Conversation this run belongs to — same as {@link Scope.threadId}. */
   threadId: string
   status: RunStatus
   startedAt: number
@@ -232,19 +237,88 @@ export interface MetadataStore {
   delete: (namespace: string, key: string) => Promise<void>
 }
 
+/**
+ * Sparse bag of **state** store keys — composition / validation only.
+ *
+ * **Not a public product shape.** Prefer the named chat shapes below
+ * ({@link ChatTranscriptStores}, {@link ChatPersistenceStores},
+ * {@link ChatWithInterruptsStores}). Locks are not included (see
+ * {@link withLocks}).
+ *
+ * @internal Exported from this module for generics; the package root does not
+ * re-export this type — use a named shape or `AIPersistence<{ … }>` instead.
+ */
 export interface AIPersistenceStores {
   messages?: MessageStore
   runs?: RunStore
   interrupts?: InterruptStore
   metadata?: MetadataStore
-  locks?: LockStore
 }
 
+/**
+ * Chat floor: durable transcript. `messages` is required.
+ *
+ * `runs` / `interrupts` / `metadata` remain optional. If `interrupts` is set,
+ * `runs` is required (enforced by `withPersistence` / validators).
+ */
+export interface ChatTranscriptStores {
+  messages: MessageStore
+  runs?: RunStore
+  interrupts?: InterruptStore
+  metadata?: MetadataStore
+}
+
+/**
+ * Full chat durability — what packaged backends return
+ * (`memoryPersistence`, Drizzle, Prisma, D1).
+ *
+ * All four state stores are present. Custom backends that only need a
+ * transcript should use {@link ChatTranscriptStores} instead.
+ */
+export interface ChatPersistenceStores {
+  messages: MessageStore
+  runs: RunStore
+  interrupts: InterruptStore
+  metadata: MetadataStore
+}
+
+/**
+ * Chat with durable human-in-the-loop interrupts (and optional metadata).
+ * Implies `runs` (interrupt records are run-scoped).
+ *
+ * Prefer {@link ChatPersistenceStores} when you also have metadata (packaged
+ * backends). Use this when interrupts are required but metadata is not.
+ */
+export interface ChatWithInterruptsStores {
+  messages: MessageStore
+  runs: RunStore
+  interrupts: InterruptStore
+  metadata?: MetadataStore
+}
+
+/**
+ * Persistence aggregate. Parameterize with a named store shape, or a sparse
+ * map for composition (`defineAIPersistence` / `composePersistence`).
+ *
+ * Default is the sparse bag so untyped / dynamic bags still type-check;
+ * prefer {@link ChatTranscriptPersistence} or {@link ChatPersistence} at
+ * call sites.
+ */
 export interface AIPersistence<
   TStores extends AIPersistenceStores = AIPersistenceStores,
 > {
   stores: ExactStoreKeys<TStores>
 }
+
+/** {@link AIPersistence} for {@link ChatTranscriptStores}. */
+export type ChatTranscriptPersistence = AIPersistence<ChatTranscriptStores>
+
+/** {@link AIPersistence} for {@link ChatPersistenceStores}. */
+export type ChatPersistence = AIPersistence<ChatPersistenceStores>
+
+/** {@link AIPersistence} for {@link ChatWithInterruptsStores}. */
+export type ChatWithInterruptsPersistence =
+  AIPersistence<ChatWithInterruptsStores>
 
 type StoreKey = keyof AIPersistenceStores
 type ExactStoreKeys<TStores> =
@@ -351,7 +425,6 @@ const storeKeys = [
   'runs',
   'interrupts',
   'metadata',
-  'locks',
 ] satisfies Array<StoreKey>
 
 const storeKeySet = new Set<string>(storeKeys)
@@ -368,12 +441,45 @@ export function validatePersistenceStoreKeys(persistence: AIPersistence): void {
   assertKnownStoreKeys(persistence.stores, 'store')
 }
 
+/**
+ * Chat middleware entrypoint rules:
+ * - `messages` is required (chat persistence means a durable transcript)
+ * - `interrupts` requires `runs` (interrupt records are run-scoped)
+ */
 export function validateChatPersistenceStores(
   persistence: AIPersistence,
 ): void {
   validatePersistenceStoreKeys(persistence)
+  if (!persistence.stores.messages) {
+    throw new Error('Chat persistence requires stores.messages.')
+  }
   if (persistence.stores.interrupts && !persistence.stores.runs) {
     throw new Error('Chat persistence stores.interrupts requires stores.runs.')
+  }
+}
+
+/**
+ * Generation middleware entrypoint rule: `runs` is required (run lifecycle is
+ * the only generation state this middleware tracks).
+ */
+export function validateGenerationPersistenceStores(
+  persistence: AIPersistence,
+): void {
+  validatePersistenceStoreKeys(persistence)
+  if (!persistence.stores.runs) {
+    throw new Error('Generation persistence requires stores.runs.')
+  }
+}
+
+/**
+ * Server hydrate entrypoint rule: `messages` is required.
+ */
+export function validateReconstructChatStores(
+  persistence: AIPersistence,
+): void {
+  validatePersistenceStoreKeys(persistence)
+  if (!persistence.stores.messages) {
+    throw new Error('reconstructChat requires stores.messages.')
   }
 }
 

@@ -75,7 +75,7 @@ function response(status: number): Response {
  * Durable Object class backing distributed lock leases.
  *
  * Bind this class in Wrangler and pass the resulting namespace to
- * `cloudflarePersistence({ durableObjects })`.
+ * `createDurableObjectLockStore` + `withLocks`.
  *
  * SECURITY: this DO must ONLY be reachable through its namespace binding (via
  * `createDurableObjectLockStore`). Its `fetch` handler trusts the caller's

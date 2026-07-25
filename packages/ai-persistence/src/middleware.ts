@@ -9,7 +9,7 @@ import {
 } from './capabilities'
 import {
   validateChatPersistenceStores,
-  validatePersistenceStoreKeys,
+  validateGenerationPersistenceStores,
 } from './types'
 import type {
   AbortInfo,
@@ -30,9 +30,11 @@ import type {
   ToolApprovalResolution,
   TokenUsage,
 } from '@tanstack/ai'
+import type { LockStore } from './locks'
 import type {
   AIPersistence,
   AIPersistenceStores,
+  ChatTranscriptStores,
   InterruptRecord,
   RunStore,
 } from './types'
@@ -265,17 +267,13 @@ function interruptPayload(interrupt: unknown): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 interface PersistencePlan {
-  wantsMessages: boolean
   wantsInterrupts: boolean
-  wantsLocks: boolean
   runs: AIPersistence['stores']['runs']
 }
 
 function resolvePersistencePlan(persistence: AIPersistence): PersistencePlan {
   return {
-    wantsMessages: persistence.stores.messages !== undefined,
     wantsInterrupts: persistence.stores.interrupts !== undefined,
-    wantsLocks: persistence.stores.locks !== undefined,
     runs: persistence.stores.runs,
   }
 }
@@ -300,13 +298,30 @@ type StoreIsDefinitelyAbsent<
     : false
   : true
 
+/**
+ * Chat entrypoint invalid when:
+ * - `messages` is known-absent, or
+ * - `interrupts` is known-present without `runs`.
+ *
+ * Fully optional bags (`AIPersistence` with all `?` keys) stay assignable and
+ * are checked at runtime by {@link validateChatPersistenceStores}.
+ */
 type InvalidChatPersistence<TStores extends AIPersistenceStores> =
-  StoreIsDefinitelyPresent<TStores, 'interrupts'> extends true
-    ? StoreIsDefinitelyAbsent<TStores, 'runs'>
-    : false
+  StoreIsDefinitelyAbsent<TStores, 'messages'> extends true
+    ? true
+    : StoreIsDefinitelyPresent<TStores, 'interrupts'> extends true
+      ? StoreIsDefinitelyAbsent<TStores, 'runs'>
+      : false
 
 type ValidChatPersistence<TStores extends AIPersistenceStores> =
   InvalidChatPersistence<TStores> extends true ? never : unknown
+
+/** Generation entrypoint invalid when `runs` is known-absent. */
+type InvalidGenerationPersistence<TStores extends AIPersistenceStores> =
+  StoreIsDefinitelyAbsent<TStores, 'runs'> extends true ? true : false
+
+type ValidGenerationPersistence<TStores extends AIPersistenceStores> =
+  InvalidGenerationPersistence<TStores> extends true ? never : unknown
 
 async function createOrResumeRun(
   runs: RunStore | undefined,
@@ -359,11 +374,16 @@ async function interruptRun(
 // ---------------------------------------------------------------------------
 
 /**
- * Chat-only persistence middleware. Provides durable **state** for `chat()`:
- * thread messages, run records, interrupts, and locks. This middleware never
- * mutates the chunk stream; delivery durability (replaying a
- * disconnected/reloaded stream) is a separate transport-layer concern (see
- * the resumable-streams docs).
+ * Chat-only **state** persistence middleware. Provides durable transcript,
+ * run records, and interrupts for `chat()`. Does **not** provide locks —
+ * use {@link withLocks} for multi-instance coordination.
+ *
+ * This middleware never mutates the chunk stream; delivery durability
+ * (replaying a disconnected/reloaded stream) is a separate transport-layer
+ * concern (see the resumable-streams docs).
+ *
+ * Requires `stores.messages`. When `stores.interrupts` is present,
+ * `stores.runs` is also required.
  *
  * ⚠️ AUTHORITATIVE-HISTORY CONTRACT: when a request carries a non-empty
  * `messages` array it is treated as the FULL conversation history and, on
@@ -390,24 +410,30 @@ export interface WithPersistenceOptions {
   snapshotIntervalMs?: number
 }
 
-export function withPersistence<TStores extends AIPersistenceStores>(
+/**
+ * @param persistence - Must satisfy {@link ChatTranscriptStores} (messages
+ *   required). Known-absent `messages` or `interrupts` without `runs` fail at
+ *   compile time; fully dynamic bags are checked at runtime.
+ */
+export function withPersistence<TStores extends ChatTranscriptStores>(
   persistence: AIPersistence<TStores> & ValidChatPersistence<TStores>,
-  options?: WithPersistenceOptions,
-): ChatMiddleware
-export function withPersistence(
-  persistence: AIPersistence,
   options: WithPersistenceOptions = {},
 ): ChatMiddleware {
+  // Runtime validation covers dynamic bags that bypass the generic constraint.
   validateChatPersistenceStores(persistence)
   const snapshotStreaming = options.snapshotStreaming ?? false
   const snapshotIntervalMs = options.snapshotIntervalMs ?? 1000
   const plan = resolvePersistencePlan(persistence)
-  const { wantsMessages, wantsInterrupts, wantsLocks, runs } = plan
+  const { wantsInterrupts, runs } = plan
+  const messageStore = persistence.stores.messages
+  if (!messageStore) {
+    // validateChatPersistenceStores already throws; this narrows for TypeScript.
+    throw new Error('Chat persistence requires stores.messages.')
+  }
 
   const provides = [
     PersistenceCapability,
     ...(wantsInterrupts ? [InterruptsCapability] : []),
-    ...(wantsLocks ? [LocksCapability] : []),
   ]
 
   return defineChatMiddleware({
@@ -423,9 +449,6 @@ export function withPersistence(
 
       if (wantsInterrupts && persistence.stores.interrupts) {
         provideInterrupts(ctx, persistence.stores.interrupts)
-      }
-      if (wantsLocks && persistence.stores.locks) {
-        provideLocks(ctx, persistence.stores.locks)
       }
     },
 
@@ -468,13 +491,11 @@ export function withPersistence(
 
       await createOrResumeRun(runs, ctx.runId, ctx.threadId)
 
-      if (wantsMessages && persistence.stores.messages) {
+      {
         const state = runState.get(ctx)
         if (!state?.merged) {
           if (state) state.merged = true
-          const stored = await persistence.stores.messages.loadThread(
-            ctx.threadId,
-          )
+          const stored = await messageStore.loadThread(ctx.threadId)
           patch.messages = config.messages.length > 0 ? config.messages : stored
         }
       }
@@ -487,11 +508,8 @@ export function withPersistence(
       // prior history) as soon as the run starts, so a reload mid-run rehydrates
       // it before the assistant reply exists. Best-effort: a failed eager
       // snapshot must not abort the run — the authoritative save is `onFinish`.
-      if (!wantsMessages || !persistence.stores.messages) return
       try {
-        await persistence.stores.messages.saveThread(ctx.threadId, [
-          ...ctx.messages,
-        ])
+        await messageStore.saveThread(ctx.threadId, [...ctx.messages])
       } catch {
         // Eager pre-save is best-effort; the run continues and onFinish saves.
       }
@@ -518,8 +536,6 @@ export function withPersistence(
       // `ctx.messages` + that partial assistant message (tagged with its id).
       if (
         snapshotStreaming &&
-        wantsMessages &&
-        persistence.stores.messages &&
         chunk.type === 'TEXT_MESSAGE_CONTENT' &&
         typeof chunk.delta === 'string'
       ) {
@@ -531,7 +547,7 @@ export function withPersistence(
           if (now - (snapshotState.lastSnapshotAt ?? 0) >= snapshotIntervalMs) {
             snapshotState.lastSnapshotAt = now
             try {
-              await persistence.stores.messages.saveThread(ctx.threadId, [
+              await messageStore.saveThread(ctx.threadId, [
                 ...ctx.messages,
                 {
                   role: 'assistant',
@@ -575,11 +591,7 @@ export function withPersistence(
         }
       }
       await interruptRun(runs, ctx.runId)
-      if (wantsMessages && persistence.stores.messages) {
-        await persistence.stores.messages.saveThread(ctx.threadId, [
-          ...ctx.messages,
-        ])
-      }
+      await messageStore.saveThread(ctx.threadId, [...ctx.messages])
       state.interrupted = true
     },
 
@@ -590,12 +602,10 @@ export function withPersistence(
       // resumes stay pending so a retry can re-apply them. Completing the run
       // or consuming approvals before the durable history lands leaves a
       // "finished" run whose transcript is missing the terminal turn.
-      if (wantsMessages && persistence.stores.messages) {
-        await persistence.stores.messages.saveThread(
-          ctx.threadId,
-          finishedTranscript(ctx.messages, info, state?.streamingMessageId),
-        )
-      }
+      await messageStore.saveThread(
+        ctx.threadId,
+        finishedTranscript(ctx.messages, info, state?.streamingMessageId),
+      )
       await completeRun(runs, ctx.runId, info.usage)
       await commitPendingResumes(state, persistence.stores.interrupts)
     },
@@ -611,47 +621,93 @@ export function withPersistence(
 }
 
 // ---------------------------------------------------------------------------
+// Locks middleware (coordination — not state persistence)
+// ---------------------------------------------------------------------------
+
+/**
+ * Provide a {@link LockStore} on the chat middleware capability bus.
+ *
+ * Locks are independent of {@link withPersistence}: state backends (Drizzle,
+ * Prisma, D1, memory) do not ship locks, and multi-instance apps compose a
+ * distributed lock separately (e.g. Cloudflare Durable Objects).
+ *
+ * ```ts
+ * middleware: [
+ *   withPersistence(drizzlePersistence(db, opts)),
+ *   withLocks(createDurableObjectLockStore(env.AI_LOCKS)),
+ * ]
+ * ```
+ */
+export function withLocks(locks: LockStore): ChatMiddleware {
+  return defineChatMiddleware({
+    name: 'locks',
+    provides: [LocksCapability],
+    setup(ctx: ChatMiddlewareContext) {
+      provideLocks(ctx, locks)
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Generation middleware
 // ---------------------------------------------------------------------------
 
 /**
  * Generation-only persistence middleware. Tracks run status (run records) for
  * image, audio, TTS, video, and transcription activities.
+ *
+ * Requires `stores.runs`.
+ *
+ * ⚠️ TEMPORARY / WRONG SHAPE — do not extend this design.
+ *
+ * Generation jobs must **not** fake `threadId = requestId`. `threadId` is the
+ * shared conversation key ({@link Scope.threadId} / chat middleware); a
+ * generation activity has no conversation. Dual-keying chat {@link RunStore}
+ * with `(runId: requestId, threadId: requestId)` pollutes chat run queries and
+ * confuses `findActiveRun(threadId)`.
+ *
+ * The follow-up generation-persistence work should introduce a dedicated job
+ * store (e.g. `GenerationJobStore` keyed by `jobId` / `requestId`) and optional
+ * later artifact storage — not reuse chat `RunStore` / `MessageStore`. An
+ * optional `threadId` on a job is only a *link* to a chat when the product
+ * needs it, never the job's primary identity.
  */
-export function withGenerationPersistence<TStores extends AIPersistenceStores>(
-  persistence: AIPersistence<TStores>,
-): GenerationMiddleware
-export function withGenerationPersistence(
-  persistence: AIPersistence,
+export function withGenerationPersistence<
+  TStores extends AIPersistenceStores & { runs: RunStore },
+>(
+  persistence: AIPersistence<TStores> & ValidGenerationPersistence<TStores>,
 ): GenerationMiddleware {
-  validatePersistenceStoreKeys(persistence)
-  const { runs } = resolvePersistencePlan(persistence)
+  validateGenerationPersistenceStores(persistence)
+  const runStore = persistence.stores.runs
+  if (!runStore) {
+    // validateGenerationPersistenceStores already throws; this narrows for TypeScript.
+    throw new Error('Generation persistence requires stores.runs.')
+  }
 
-  // A generation activity has no thread or agent run: its only stable identity
-  // is `requestId`, so the run record is keyed by it on both axes.
   return {
     name: 'generation-persistence',
 
     async onStart(ctx: GenerationMiddlewareContext) {
-      await createOrResumeRun(runs, ctx.requestId, ctx.requestId)
+      // STOPGAP ONLY — see function JSDoc. Do not copy this pattern.
+      await createOrResumeRun(runStore, ctx.requestId, ctx.requestId)
     },
 
     async onFinish(
       ctx: GenerationMiddlewareContext,
       info: GenerationFinishInfo,
     ) {
-      await completeRun(runs, ctx.requestId, info.usage)
+      await completeRun(runStore, ctx.requestId, info.usage)
     },
 
     async onError(ctx: GenerationMiddlewareContext, info: GenerationErrorInfo) {
-      await failRun(runs, ctx.requestId, info.error)
+      await failRun(runStore, ctx.requestId, info.error)
     },
 
     async onAbort(
       ctx: GenerationMiddlewareContext,
       _info: GenerationAbortInfo,
     ) {
-      await interruptRun(runs, ctx.requestId)
+      await interruptRun(runStore, ctx.requestId)
     },
   }
 }

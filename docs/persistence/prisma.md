@@ -115,12 +115,11 @@ export async function POST(request: Request) {
 }
 ```
 
-`prismaPersistence` provides no `locks` store: this backend has no distributed
-lock, so consumers that need one fall back to an in-process lock. Use
-`composePersistence` to add a distributed `locks` implementation — for example
-the Cloudflare Durable Object lock from `@tanstack/ai-persistence-cloudflare` —
-or to route selected stores to another system. Composition does not add a
-transaction across multiple backends.
+`prismaPersistence` provides state stores only (messages, runs, interrupts,
+metadata). Locks are separate: use `withLocks` with a distributed `LockStore`
+(for example `createDurableObjectLockStore` from
+`@tanstack/ai-persistence-cloudflare`) when multi-instance coordination is
+required.
 
 ## Model layout
 

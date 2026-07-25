@@ -4,8 +4,10 @@ import { composePersistence } from '@tanstack/ai-persistence'
 import {
   CloudflareLockDurableObject,
   cloudflarePersistence,
+  createDurableObjectLockStore,
 } from '../src/index'
 import type {
+  ChatPersistence,
   InterruptStore,
   LockStore,
   MessageStore,
@@ -19,33 +21,21 @@ declare const durableObjectState: DurableObjectState
 
 new CloudflareLockDurableObject(durableObjectState)
 
-expectTypeOf(cloudflarePersistence({}).stores).toEqualTypeOf<{}>()
-expectTypeOf(cloudflarePersistence({ d1 }).stores).toEqualTypeOf<{
+expectTypeOf(cloudflarePersistence({ d1 })).toEqualTypeOf<ChatPersistence>()
+expectTypeOf(cloudflarePersistence({ d1 }).stores).toMatchTypeOf<{
   messages: MessageStore
   runs: RunStore
-  interrupts: InterruptStore
-  metadata: MetadataStore
-}>()
-expectTypeOf(cloudflarePersistence({ durableObjects }).stores).toEqualTypeOf<{
-  locks: LockStore
-}>()
-expectTypeOf(
-  cloudflarePersistence({ d1, durableObjects }).stores,
-).toEqualTypeOf<{
-  messages: MessageStore
-  runs: RunStore
-  interrupts: InterruptStore
-  metadata: MetadataStore
-  locks: LockStore
-}>()
-
-declare const optionalD1: D1Database | undefined
-expectTypeOf(cloudflarePersistence({ d1: optionalD1 }).stores).toEqualTypeOf<{
-  messages?: MessageStore
-  runs?: RunStore
   interrupts?: InterruptStore
   metadata?: MetadataStore
 }>()
+// Packaged backends always provide all four state stores:
+expectTypeOf(cloudflarePersistence({ d1 }).stores.messages).toEqualTypeOf<MessageStore>()
+expectTypeOf(cloudflarePersistence({ d1 }).stores.runs).toEqualTypeOf<RunStore>()
+
+// Locks are a separate export — not part of the state bag.
+expectTypeOf(
+  createDurableObjectLockStore(durableObjects),
+).toEqualTypeOf<LockStore>()
 
 const d1Persistence = cloudflarePersistence({ d1 })
 declare const customInterrupts: InterruptStore
@@ -58,8 +48,7 @@ expectTypeOf(replaced.stores.runs).toEqualTypeOf<RunStore>()
 const removed = composePersistence(d1Persistence, {
   overrides: { interrupts: false },
 })
-expectTypeOf(removed.stores).toEqualTypeOf<{
-  messages: MessageStore
-  runs: RunStore
-  metadata: MetadataStore
-}>()
+expectTypeOf(removed.stores.messages).toEqualTypeOf<MessageStore>()
+expectTypeOf(removed.stores.runs).toEqualTypeOf<RunStore>()
+// @ts-expect-error interrupts removed
+removed.stores.interrupts

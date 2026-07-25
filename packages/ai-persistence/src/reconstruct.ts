@@ -1,6 +1,7 @@
 import { modelMessagesToUIMessages } from '@tanstack/ai'
 import type { UIMessage } from '@tanstack/ai'
-import type { AIPersistence } from './types'
+import { validateReconstructChatStores } from './types'
+import type { AIPersistence, ChatTranscriptStores } from './types'
 
 /**
  * The JSON body `reconstructChat` returns and a server-authoritative client
@@ -62,8 +63,8 @@ export interface ReconstructChatOptions {
  *   a reload re-prompts the decision from the server. Resolved via the optional
  *   `stores.interrupts.listPending`; `null` when that store is absent.
  *
- * Returns an empty transcript with no active run and no interrupts when the thread
- * id is missing, no `messages` store is configured, or the thread is unknown, so
+ * Requires `stores.messages`. Returns an empty transcript with no active run
+ * and no interrupts when the thread id is missing or the thread is unknown, so
  * the caller never has to special-case a first load.
  *
  * This helper does **not** enforce tenancy by itself. Pass
@@ -82,10 +83,17 @@ export interface ReconstructChatOptions {
  * ```
  */
 export async function reconstructChat(
-  persistence: AIPersistence,
+  persistence: AIPersistence<ChatTranscriptStores>,
   request: Request,
   options?: ReconstructChatOptions,
 ): Promise<Response> {
+  validateReconstructChatStores(persistence)
+  const messageStore = persistence.stores.messages
+  if (!messageStore) {
+    // validateReconstructChatStores already throws; this narrows for TypeScript.
+    throw new Error('reconstructChat requires stores.messages.')
+  }
+
   const param = options?.param ?? 'threadId'
   const threadId = new URL(request.url).searchParams.get(param) ?? ''
 
@@ -114,10 +122,7 @@ export async function reconstructChat(
   const active = threadId
     ? await persistence.stores.runs?.findActiveRun?.(threadId)
     : null
-  const stored =
-    threadId && persistence.stores.messages
-      ? await persistence.stores.messages.loadThread(threadId)
-      : []
+  const stored = threadId ? await messageStore.loadThread(threadId) : []
   // Pending interrupts for the thread, so a reload re-prompts the approval from
   // the server. Each stored `payload` is the full interrupt descriptor the
   // client hydrates; they share the run they paused.

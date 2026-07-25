@@ -55,6 +55,14 @@ resumes the run record, and `onFinish`, `onError`, and `onAbort` terminalize
 it. Durable media storage (artifact metadata plus blob bytes) is a follow-up
 feature.
 
+**Do not treat this as the long-term generation model.** Today it reuses chat
+`RunStore` and dual-keys `(runId, threadId)` both to `requestId`. That is a
+stopgap: **generation jobs must not fake `threadId = requestId`.** `threadId`
+is the shared conversation key (`Scope.threadId`); a generation job's primary
+id is `requestId` / `jobId`. The follow-up should introduce a dedicated
+generation job store (and later artifact store), not chat `RunStore` /
+`MessageStore`.
+
 ## Composition semantics
 
 ```ts
@@ -70,23 +78,27 @@ const result = composePersistence(base, {
   overrides: {
     messages: replacement,
     metadata: undefined,
-    locks: false,
+    interrupts: false,
   },
 })
 ```
 
 - `messages` is replaced.
 - `metadata` is inherited because the override is `undefined`.
-- `locks` is removed.
+- `interrupts` is removed.
 - every omitted store is inherited.
 
 Composition copies the store map and does not mutate or dispose either input.
 The return type calculates which keys are required, optional, replaced, or
 removed. Unknown store keys are rejected statically and by runtime validation.
 
-Middleware adds capability validation:
+Middleware adds entrypoint validation:
 
-- chat rejects `interrupts` without `runs`.
+- chat requires `messages`; rejects `interrupts` without `runs`.
+- generation requires `runs`.
+- `reconstructChat` requires `messages`.
+
+Locks are not state stores and are not composed here — use `withLocks`.
 
 The runtime checks are required because JavaScript, configuration loading, and
 explicitly widened types can bypass static guarantees.
@@ -99,7 +111,8 @@ Packaged backends own resources differently:
   drizzle-kit owns migrations). The root import is edge-safe. The `/sqlite`
   entry creates a Node SQLite connection with stock defaults.
 - Prisma accepts the application's generated and migrated client.
-- Cloudflare maps D1 to structured stores and Durable Objects to locks.
+- Cloudflare maps D1 to structured state stores; Durable Object locks are a
+  separate export (`createDurableObjectLockStore` + `withLocks`).
 
 `composePersistence` does not add distributed transactions. When related
 stores use different systems, adapter authors must define retry,

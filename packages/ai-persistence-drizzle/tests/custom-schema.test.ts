@@ -35,15 +35,11 @@ function createVariantDb(): { db: DrizzleSqliteDb; sqlite: DatabaseSync } {
 
 // The full store contract must hold when the runtime operates over a schema
 // whose table and column database names all differ from the defaults.
-runPersistenceConformance(
-  'drizzle-sqlite (injected variant schema)',
-  () =>
-    drizzlePersistence(createVariantDb().db, {
-      provider: 'sqlite',
-      schema: variantSchema,
-    }),
-  // This backend has no distributed lock primitive.
-  { skip: ['locks'] },
+runPersistenceConformance('drizzle-sqlite (injected variant schema)', () =>
+  drizzlePersistence(createVariantDb().db, {
+    provider: 'sqlite',
+    schema: variantSchema,
+  }),
 )
 
 describe('drizzlePersistence with an injected schema', () => {

@@ -74,9 +74,6 @@ afterAll(async () => {
   )
 })
 
-runPersistenceConformance(
-  'prisma',
-  async () => prismaPersistence(await makeTestClient()),
-  // This backend has no distributed lock primitive.
-  { skip: ['locks'] },
+runPersistenceConformance('prisma', async () =>
+  prismaPersistence(await makeTestClient()),
 )

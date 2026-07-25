@@ -19,6 +19,7 @@ import { drizzle } from 'drizzle-orm/sqlite-proxy'
 import { createDefaultSqliteSchema } from './default-sqlite-schema'
 import { ensureSqliteTables } from './ensure-sqlite-tables'
 import { drizzlePersistence } from './index'
+import type { ChatPersistence } from '@tanstack/ai-persistence'
 import type { TanstackAiSqliteSchema } from './schema-contract'
 
 export { createDefaultSqliteSchema } from './default-sqlite-schema'
@@ -63,7 +64,10 @@ export interface SqlitePersistenceOptions {
  * })
  * ```
  */
-export function sqlitePersistence(options: SqlitePersistenceOptions) {
+export function sqlitePersistence(options: SqlitePersistenceOptions): ChatPersistence & {
+  /** Close the underlying Node SQLite connection. */
+  close: () => void
+} {
   const schema = options.schema ?? createDefaultSqliteSchema()
   const filename = normalizeSqliteUrl(options.url)
   ensureParentDirectory(filename)

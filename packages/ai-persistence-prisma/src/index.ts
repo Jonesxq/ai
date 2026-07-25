@@ -12,6 +12,7 @@ import {
   createMetadataStore,
   createRunStore,
 } from './stores'
+import type { ChatPersistence } from '@tanstack/ai-persistence'
 import type { PrismaModelMap } from './model-contract'
 
 export { prismaModels, prismaModelsFilename } from './models'
@@ -48,17 +49,18 @@ export interface PrismaPersistenceOptions {
 /**
  * Wire TanStack AI persistence stores over a migrated Prisma client.
  *
- * No `locks` store is returned: this backend has no distributed lock primitive,
- * and bundling an `InMemoryLockStore` would silently hand multi-instance
- * deployments a lock that does not lock across instances. Consumers that need a
- * lock (e.g. `withSandbox`) transparently fall back to an in-process
- * `InMemoryLockStore`; for cross-instance locking use a distributed backend such
- * as the Cloudflare Durable Object lock (`@tanstack/ai-persistence-cloudflare`).
+ * State stores only — locks are a separate concern. For multi-instance
+ * coordination use `withLocks` with a distributed `LockStore` (for example
+ * `createDurableObjectLockStore` from `@tanstack/ai-persistence-cloudflare`).
+ * Do not invent an in-process lock and pretend it coordinates across instances.
+ */
+/**
+ * Returns {@link ChatPersistence} (messages + runs + interrupts + metadata).
  */
 export function prismaPersistence(
   prisma: PrismaClientLike,
   options?: PrismaPersistenceOptions,
-) {
+): ChatPersistence {
   const delegates = resolveDelegates(prisma, options?.models)
   return {
     stores: {

@@ -257,15 +257,22 @@ Client-only persistence can't do multi-device and bloats storage. Caching everyt
 
 ## The store contract
 
-Server persistence is a set of stores. Middleware activates behavior from whichever stores are present, there is no separate enable list.
+Server **state** persistence is a set of stores. Middleware activates behavior
+from whichever stores are present (with entrypoint requirements — see
+[Controls](./controls)). There is no separate enable list.
 
 | Store | Purpose |
 | --- | --- |
-| `messages` | Authoritative model-message history per thread. |
-| `runs` | Run status, timing, errors, and usage. |
+| `messages` | Authoritative model-message history per thread. Required by chat persistence. |
+| `runs` | Run status, timing, errors, and usage. Required on full `ChatPersistence`. |
 | `interrupts` | Pending, resolved, or cancelled human/tool waits (needs `runs`). |
 | `metadata` | App and integration key/value state. |
-| `locks` | Cross-worker coordination. |
+
+Named shapes: `ChatTranscriptStores` (messages floor), `ChatPersistenceStores`
+(full packaged backend), `ChatWithInterruptsStores`. See [Controls](./controls).
+
+**Locks** (cross-worker coordination) are a separate concern: use `withLocks`
+and a `LockStore` implementation, not a fifth state store.
 
 ## Where to go next
 

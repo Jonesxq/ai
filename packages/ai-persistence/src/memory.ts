@@ -1,8 +1,7 @@
-import { InMemoryLockStore } from './locks'
 import { defineAIPersistence } from './types'
-import type { LockStore } from './locks'
 import type { ModelMessage } from '@tanstack/ai'
 import type {
+  ChatPersistence,
   InterruptRecord,
   InterruptStore,
   MessageStore,
@@ -170,21 +169,20 @@ class MemoryMetadataStore implements MetadataStore {
   }
 }
 
-interface MemoryPersistenceStores {
-  messages: MessageStore
-  runs: RunStore
-  interrupts: InterruptStore
-  metadata: MetadataStore
-  locks: LockStore
-}
-
-export function memoryPersistence() {
-  const stores: MemoryPersistenceStores = {
-    messages: new MemoryMessageStore(),
-    runs: new MemoryRunStore(),
-    interrupts: new MemoryInterruptStore(),
-    metadata: new MemoryMetadataStore(),
-    locks: new InMemoryLockStore(),
-  }
-  return defineAIPersistence({ stores })
+/**
+ * In-process reference backend for **chat** state stores.
+ *
+ * Returns {@link ChatPersistence} (messages + runs + interrupts + metadata).
+ * Locks are not included — use {@link InMemoryLockStore} + {@link withLocks}
+ * when a test or single-process app needs coordination.
+ */
+export function memoryPersistence(): ChatPersistence {
+  return defineAIPersistence({
+    stores: {
+      messages: new MemoryMessageStore(),
+      runs: new MemoryRunStore(),
+      interrupts: new MemoryInterruptStore(),
+      metadata: new MemoryMetadataStore(),
+    },
+  })
 }

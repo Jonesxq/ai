@@ -46,13 +46,16 @@ export async function POST(request: Request) {
 }
 ```
 
-The middleware uses whichever stores the backend provides, no feature flags:
+The middleware uses whichever **state** stores the backend provides, no feature
+flags. `messages` is required; the rest are optional:
 
-- `messages` loads and saves the full model-message thread.
+- `messages` (required) loads and saves the full model-message thread.
 - `runs` records running, completed, failed, or interrupted status.
 - `interrupts` records pending tool-approval / client-tool / generic waits, and
   requires `runs`.
-- `locks` is handed to other middleware for cross-worker coordination.
+
+Cross-worker locks are **not** part of this middleware — add `withLocks` when
+other middleware needs multi-instance coordination.
 
 The `/sqlite` factory bootstraps stock tables for local development. In
 production, emit a schema with `tanstack-ai-drizzle-schema` and migrate via

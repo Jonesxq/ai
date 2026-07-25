@@ -2,9 +2,8 @@ import { expectTypeOf } from 'vitest'
 import type { DrizzleD1Database } from 'drizzle-orm/d1'
 import type { PgliteDatabase } from 'drizzle-orm/pglite'
 import type {
-  InterruptStore,
+  ChatPersistence,
   MessageStore,
-  MetadataStore,
   RunStore,
 } from '@tanstack/ai-persistence'
 import {
@@ -26,18 +25,17 @@ const d1Persistence = drizzlePersistence(d1Database, {
   provider: 'sqlite',
   schema: defaultSchema,
 })
+expectTypeOf(d1Persistence).toEqualTypeOf<ChatPersistence>()
 expectTypeOf(d1Persistence.stores.messages).toEqualTypeOf<MessageStore>()
 expectTypeOf(d1Persistence.stores.runs).toEqualTypeOf<RunStore>()
-expectTypeOf(d1Persistence.stores.interrupts).toEqualTypeOf<InterruptStore>()
-expectTypeOf(d1Persistence.stores.metadata).toEqualTypeOf<MetadataStore>()
-// No `locks` store: this backend has no distributed lock (see drizzlePersistence).
+// State bag only — locks are provided separately via withLocks.
 expectTypeOf(d1Persistence.stores).not.toHaveProperty('locks')
 
 const pgPersistence = drizzlePersistence(pgDatabase, {
   provider: 'pg',
   schema: defaultPgSchema,
 })
-expectTypeOf(pgPersistence.stores).toEqualTypeOf<typeof d1Persistence.stores>()
+expectTypeOf(pgPersistence).toEqualTypeOf<ChatPersistence>()
 
 // Provider, db, and schema dialects must agree.
 // @ts-expect-error sqlite db cannot be used with provider 'pg'
@@ -52,7 +50,7 @@ drizzlePersistence(pgDatabase, { provider: 'pg', schema: defaultSchema })
 drizzlePersistence(d1Database, { schema: defaultSchema })
 
 const sqlite = sqlitePersistence({ url: ':memory:' })
-expectTypeOf(sqlite.stores).toEqualTypeOf<typeof d1Persistence.stores>()
+expectTypeOf(sqlite.stores).toEqualTypeOf<ChatPersistence['stores']>()
 expectTypeOf(sqlite.close).toEqualTypeOf<() => void>()
 
 // Default factories, emitted assets, and renamed/extended variant all satisfy
@@ -67,6 +65,4 @@ const customPersistence = drizzlePersistence(d1Database, {
   provider: 'sqlite',
   schema: variantSchema,
 })
-expectTypeOf(customPersistence.stores).toEqualTypeOf<
-  typeof d1Persistence.stores
->()
+expectTypeOf(customPersistence).toEqualTypeOf<ChatPersistence>()

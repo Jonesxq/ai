@@ -4,7 +4,7 @@ import { Miniflare } from 'miniflare'
 import { runPersistenceConformance } from '@tanstack/ai-persistence/testkit'
 import { cloudflarePersistence, d1Migrations } from '../src/index'
 import { composePersistence } from '@tanstack/ai-persistence'
-import type { AIPersistence, InterruptStore } from '@tanstack/ai-persistence'
+import type { ChatPersistence, InterruptStore } from '@tanstack/ai-persistence'
 
 interface RuntimeBindings {
   AI_DB: D1Database
@@ -12,7 +12,7 @@ interface RuntimeBindings {
 
 describe('Cloudflare persistence on Miniflare bindings', () => {
   let miniflare: Miniflare
-  let persistence: AIPersistence
+  let persistence: ChatPersistence
 
   beforeAll(async () => {
     miniflare = new Miniflare({
@@ -40,11 +40,7 @@ describe('Cloudflare persistence on Miniflare bindings', () => {
     await miniflare.dispose()
   })
 
-  runPersistenceConformance('cloudflare-d1', () => persistence, {
-    // This composition supplies only a D1 binding (no Durable Object), so
-    // there is no lock store.
-    skip: ['locks'],
-  })
+  runPersistenceConformance('cloudflare-d1', () => persistence)
 
   it('composes a custom interrupt store while retaining D1 runs', () => {
     const customInterrupts: InterruptStore = {

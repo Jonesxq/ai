@@ -110,15 +110,20 @@ Namespaces and value schemas are application-owned. `(scope, key)` is the
 composite identity. Because a stored `null` is indistinguishable from absence at
 the type level, wrap a value you must persist as `null` (e.g. `{ value: null }`).
 
-### Locks
+### Locks (separate from state stores)
 
-`LockStore` comes from `@tanstack/ai-persistence`. Use it to serialize work that
-may run on multiple workers. A lock implementation should use leases or another
-recovery mechanism so a crashed owner cannot block forever. `withLock` passes an
-`AbortSignal` to the critical section. Lease-backed implementations abort that
-signal when ownership can no longer be guaranteed; callbacks must stop starting
-external mutations and pass the signal to cancellable dependencies. The package
-ships an in-process `InMemoryLockStore` for single-process use.
+`LockStore` is **not** part of `AIPersistenceStores`. It is a coordination
+primitive provided by `withLocks(lockStore)`, independent of
+`withPersistence`.
+
+Use it to serialize work that may run on multiple workers. A lock implementation
+should use leases or another recovery mechanism so a crashed owner cannot block
+forever. `withLock` passes an `AbortSignal` to the critical section. Lease-backed
+implementations abort that signal when ownership can no longer be guaranteed;
+callbacks must stop starting external mutations and pass the signal to
+cancellable dependencies. The package ships an in-process `InMemoryLockStore`
+for single-process use; multi-instance apps use a distributed backend (e.g.
+Cloudflare Durable Objects).
 
 ## Example message store
 
@@ -207,4 +212,6 @@ Client POST (messages / resume)
 - **`createOrResume` is insert-if-absent** for the same `runId` (idempotent retries).
 - **Interrupt create is insert-if-absent** (cannot clobber a resolved row back to pending).
 - **Scope thread access at the app boundary** — store methods take bare `threadId`s; your route must authorize ownership before load/save (see `reconstructChat({ authorize })`).
-- **`locks`** (when provided) are available on the capability bus for app-level serialization; `withPersistence` does not automatically lock the whole turn — take a per-thread lock yourself if multi-writer is required.
+- **Locks** are provided via `withLocks`, not the state bag. `withPersistence`
+  does not automatically lock the whole turn — take a per-thread lock yourself
+  if multi-writer is required.

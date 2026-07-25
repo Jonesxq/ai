@@ -430,13 +430,17 @@ thread:
 Every backend returns an `AIPersistence` you pass straight to
 `withPersistence`:
 
-| Backend                                | Factory                                         | Import                                    |
-| -------------------------------------- | ----------------------------------------------- | ----------------------------------------- |
-| In-memory (dev/tests)                  | `memoryPersistence()`                           | `@tanstack/ai-persistence`                |
-| Drizzle SQLite/Postgres (edge-safe)    | `drizzlePersistence(db, { provider, schema })`  | `@tanstack/ai-persistence-drizzle`        |
-| Node SQLite convenience factory        | `sqlitePersistence({ url })`                    | `@tanstack/ai-persistence-drizzle/sqlite` |
-| Prisma                                 | `prismaPersistence(prisma)`                     | `@tanstack/ai-persistence-prisma`         |
-| Cloudflare (D1 + Durable Object locks) | `cloudflarePersistence({ d1, durableObjects })` | `@tanstack/ai-persistence-cloudflare`     |
+| Backend                             | Factory                                        | Import                                    |
+| ----------------------------------- | ---------------------------------------------- | ----------------------------------------- |
+| In-memory (dev/tests)               | `memoryPersistence()`                          | `@tanstack/ai-persistence`                |
+| Drizzle SQLite/Postgres (edge-safe) | `drizzlePersistence(db, { provider, schema })` | `@tanstack/ai-persistence-drizzle`        |
+| Node SQLite convenience factory     | `sqlitePersistence({ url })`                   | `@tanstack/ai-persistence-drizzle/sqlite` |
+| Prisma                              | `prismaPersistence(prisma)`                    | `@tanstack/ai-persistence-prisma`         |
+| Cloudflare D1 (state)               | `cloudflarePersistence({ d1 })`                | `@tanstack/ai-persistence-cloudflare`     |
+
+Locks are separate from state: `withLocks(lockStore)` + e.g.
+`createDurableObjectLockStore(env.AI_LOCKS)` from
+`@tanstack/ai-persistence-cloudflare`.
 
 `drizzlePersistence(db, { provider, schema })` is the edge-safe root —
 `provider` is `'sqlite'` (any SQLite-compatible Drizzle database, including

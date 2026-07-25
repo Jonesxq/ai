@@ -6,8 +6,9 @@ import type {
   StreamChunk,
 } from '@tanstack/ai'
 import type { LockStore } from '../src/locks'
+import { InMemoryLockStore } from '../src/locks'
 import { memoryPersistence } from '../src/memory'
-import { withPersistence } from '../src/middleware'
+import { withLocks, withPersistence } from '../src/middleware'
 import {
   InterruptsCapability,
   LocksCapability,
@@ -40,21 +41,19 @@ async function collect(stream: AsyncIterable<StreamChunk>) {
 }
 
 describe('persistence capabilities', () => {
-  it('provides persistence, interrupts, and locks to downstream middleware', async () => {
+  it('provides persistence and interrupts from withPersistence', async () => {
     const persistence = memoryPersistence()
     const seen: {
       persistence?: AIPersistence
       interrupts?: InterruptStore
-      locks?: LockStore
     } = {}
 
     const consumer = defineChatMiddleware({
       name: 'capability-consumer',
-      requires: [PersistenceCapability, InterruptsCapability, LocksCapability],
+      requires: [PersistenceCapability, InterruptsCapability],
       setup(ctx: ChatMiddlewareContext) {
         seen.persistence = getPersistence(ctx)
         seen.interrupts = getInterrupts(ctx)
-        seen.locks = getLocks(ctx)
       },
     })
 
@@ -84,15 +83,56 @@ describe('persistence capabilities', () => {
 
     expect(seen.persistence).toBe(persistence)
     expect(seen.interrupts).toBe(persistence.stores.interrupts)
-    expect(seen.locks).toBe(persistence.stores.locks)
+  })
+
+  it('provides locks from withLocks (separate from state persistence)', async () => {
+    const persistence = memoryPersistence()
+    const locks = new InMemoryLockStore()
+    const seen: { locks?: LockStore } = {}
+
+    const consumer = defineChatMiddleware({
+      name: 'lock-consumer',
+      requires: [LocksCapability],
+      setup(ctx: ChatMiddlewareContext) {
+        seen.locks = getLocks(ctx)
+      },
+    })
+
+    await collect(
+      chat({
+        adapter: mockAdapter([
+          {
+            type: EventType.RUN_STARTED,
+            runId: 'r1',
+            threadId: 't1',
+            timestamp: 1,
+          },
+          {
+            type: EventType.RUN_FINISHED,
+            runId: 'r1',
+            threadId: 't1',
+            finishReason: 'stop',
+            timestamp: 1,
+          },
+        ]),
+        messages: [{ role: 'user', content: 'hi' }],
+        runId: 'r1',
+        threadId: 't1',
+        middleware: [withPersistence(persistence), withLocks(locks), consumer],
+      }) as AsyncIterable<StreamChunk>,
+    )
+
+    expect(seen.locks).toBe(locks)
   })
 })
 
 describe('createInterruptController', () => {
   it('delegates request/resolve/cancel/list to the underlying store', async () => {
     const persistence = memoryPersistence()
+    const interruptStore = persistence.stores.interrupts
+    expect(interruptStore).toBeDefined()
     const controller = createInterruptController({
-      store: persistence.stores.interrupts!,
+      store: interruptStore,
     })
 
     await controller.request({
@@ -106,10 +146,8 @@ describe('createInterruptController', () => {
     expect(await controller.listPendingByRun('run-c')).toHaveLength(1)
 
     await controller.resolve('c1', { approved: true })
-    expect((await persistence.stores.interrupts!.get('c1'))?.status).toBe(
-      'resolved',
-    )
-    expect((await persistence.stores.interrupts!.get('c1'))?.response).toEqual({
+    expect((await interruptStore.get('c1'))?.status).toBe('resolved')
+    expect((await interruptStore.get('c1'))?.response).toEqual({
       approved: true,
     })
     expect(await controller.listPending('thread-c')).toHaveLength(0)
@@ -122,15 +160,15 @@ describe('createInterruptController', () => {
       payload: {},
     })
     await controller.cancel('c2')
-    expect((await persistence.stores.interrupts!.get('c2'))?.status).toBe(
-      'cancelled',
-    )
+    expect((await interruptStore.get('c2'))?.status).toBe('cancelled')
   })
 
   it('creates interrupts in the pending state', async () => {
     const persistence = memoryPersistence()
+    const interruptStore = persistence.stores.interrupts
+    expect(interruptStore).toBeDefined()
     const controller = createInterruptController({
-      store: persistence.stores.interrupts!,
+      store: interruptStore,
     })
     await controller.request({
       interruptId: 'c1',
@@ -139,8 +177,6 @@ describe('createInterruptController', () => {
       requestedAt: 1,
       payload: {},
     })
-    expect((await persistence.stores.interrupts!.get('c1'))?.status).toBe(
-      'pending',
-    )
+    expect((await interruptStore.get('c1'))?.status).toBe('pending')
   })
 })

@@ -21,12 +21,7 @@ import {
   createRunStore,
 } from './stores'
 import type { PgQueryResultHKT } from 'drizzle-orm/pg-core'
-import type {
-  InterruptStore,
-  MessageStore,
-  MetadataStore,
-  RunStore,
-} from '@tanstack/ai-persistence'
+import type { ChatPersistence } from '@tanstack/ai-persistence'
 import type {
   TanstackAiPgSchema,
   TanstackAiSqliteSchema,
@@ -101,40 +96,35 @@ export type DrizzlePersistenceOptions =
   | SqlitePersistenceConfig
   | PgPersistenceConfig
 
-export interface DrizzlePersistence {
-  stores: {
-    messages: MessageStore
-    runs: RunStore
-    interrupts: InterruptStore
-    metadata: MetadataStore
-  }
-}
+/** Packaged Drizzle backend: full {@link ChatPersistence} (messages + runs + …). */
+export type DrizzlePersistence = ChatPersistence
 
 /**
  * Wire TanStack AI persistence stores over a migrated Drizzle database.
  *
- * `provider` declares the dialect; `db` and `schema` must match it (checked at
- * compile time by the overloads and at runtime by the schema assertion).
- * `schema` is required — this package never applies bundled DDL. Own
- * migrations via drizzle-kit (after emitting the schema), or bootstrap a known
- * schema locally with {@link ensureSqliteTables} / {@link ensurePgTables}.
+ * Returns {@link ChatPersistence}. `provider` declares the dialect; `db` and
+ * `schema` must match it (checked at compile time by the overloads and at
+ * runtime by the schema assertion). `schema` is required — this package never
+ * applies bundled DDL. Own migrations via drizzle-kit (after emitting the
+ * schema), or bootstrap a known schema locally with {@link ensureSqliteTables}
+ * / {@link ensurePgTables}.
  *
- * No `locks` store is returned: this backend has no distributed lock
- * primitive. Consumers that need cross-instance locking should compose one in
- * (for example the Cloudflare Durable Object lock).
+ * State stores only — locks are a separate concern. For multi-instance
+ * coordination use `withLocks` with a distributed `LockStore` (for example
+ * `createDurableObjectLockStore` from `@tanstack/ai-persistence-cloudflare`).
  */
 export function drizzlePersistence(
   db: DrizzleSqliteDb,
   options: SqlitePersistenceConfig,
-): DrizzlePersistence
+): ChatPersistence
 export function drizzlePersistence(
   db: DrizzlePgDb,
   options: PgPersistenceConfig,
-): DrizzlePersistence
+): ChatPersistence
 export function drizzlePersistence(
   db: DrizzleSqliteDb | DrizzlePgDb,
   options: DrizzlePersistenceOptions,
-): DrizzlePersistence {
+): ChatPersistence {
   assertTanstackAiSchema(options.schema, options.provider)
   // The overloads guarantee db/provider/schema agree for typed callers;
   // re-verify the db dialect at runtime for anyone calling through `any`.

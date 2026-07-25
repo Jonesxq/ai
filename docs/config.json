@@ -1,4 +1,4 @@
-﻿{
+{
   "$schema": "https://raw.githubusercontent.com/TanStack/tanstack.com/main/tanstack-docs-config.schema.json",
   "docSearch": {
     "appId": "FQ0DQ6MA3C",
@@ -241,13 +241,13 @@
           "label": "Overview",
           "to": "persistence/overview",
           "addedAt": "2026-07-22",
-          "updatedAt": "2026-07-24"
+          "updatedAt": "2026-07-25"
         },
         {
           "label": "Chat Persistence",
           "to": "persistence/chat-persistence",
           "addedAt": "2026-07-22",
-          "updatedAt": "2026-07-24"
+          "updatedAt": "2026-07-25"
         },
         {
           "label": "Client Persistence",
@@ -259,36 +259,37 @@
           "label": "Controls",
           "to": "persistence/controls",
           "addedAt": "2026-07-22",
-          "updatedAt": "2026-07-23"
+          "updatedAt": "2026-07-25"
         },
         {
           "label": "Custom Stores",
           "to": "persistence/custom-stores",
           "addedAt": "2026-07-22",
-          "updatedAt": "2026-07-24"
+          "updatedAt": "2026-07-25"
         },
         {
           "label": "SQL Backends",
           "to": "persistence/sql-backends",
           "addedAt": "2026-07-22",
-          "updatedAt": "2026-07-24"
+          "updatedAt": "2026-07-25"
         },
         {
           "label": "Drizzle",
           "to": "persistence/drizzle",
           "addedAt": "2026-07-22",
-          "updatedAt": "2026-07-24"
+          "updatedAt": "2026-07-25"
         },
         {
           "label": "Prisma",
           "to": "persistence/prisma",
           "addedAt": "2026-07-22",
-          "updatedAt": "2026-07-24"
+          "updatedAt": "2026-07-25"
         },
         {
           "label": "Cloudflare",
           "to": "persistence/cloudflare",
-          "addedAt": "2026-07-22"
+          "addedAt": "2026-07-22",
+          "updatedAt": "2026-07-25"
         },
         {
           "label": "Migrations",
@@ -300,7 +301,7 @@
           "label": "Internals",
           "to": "persistence/internals",
           "addedAt": "2026-07-22",
-          "updatedAt": "2026-07-24"
+          "updatedAt": "2026-07-25"
         }
       ]
     },
@@ -633,7 +634,7 @@
           "updatedAt": "2026-07-08"
         },
         {
-          "label": "Sampling \u2192 modelOptions",
+          "label": "Sampling → modelOptions",
           "to": "migration/sampling-options-to-model-options",
           "addedAt": "2026-06-03"
         }

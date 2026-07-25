@@ -1,11 +1,6 @@
 import { expectTypeOf } from 'vitest'
 import { PrismaClient } from '@prisma/client'
-import type {
-  InterruptStore,
-  MessageStore,
-  MetadataStore,
-  RunStore,
-} from '@tanstack/ai-persistence'
+import type { ChatPersistence, MessageStore, RunStore } from '@tanstack/ai-persistence'
 import { prismaPersistence } from '../src/index'
 import type {
   InterruptDelegate,
@@ -28,11 +23,10 @@ expectTypeOf(prisma.metadata).toExtend<MetadataDelegate>()
 const mapped = prismaPersistence(prisma, {
   models: { messages: 'chatMessage' },
 })
-expectTypeOf(mapped.stores).toEqualTypeOf<typeof persistence.stores>()
+expectTypeOf(mapped).toEqualTypeOf<ChatPersistence>()
 
+expectTypeOf(persistence).toEqualTypeOf<ChatPersistence>()
 expectTypeOf(persistence.stores.messages).toEqualTypeOf<MessageStore>()
 expectTypeOf(persistence.stores.runs).toEqualTypeOf<RunStore>()
-expectTypeOf(persistence.stores.interrupts).toEqualTypeOf<InterruptStore>()
-expectTypeOf(persistence.stores.metadata).toEqualTypeOf<MetadataStore>()
-// No `locks` store: this backend has no distributed lock (see prismaPersistence).
+// State bag only — locks are provided separately via withLocks.
 expectTypeOf(persistence.stores).not.toHaveProperty('locks')

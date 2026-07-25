@@ -1,23 +1,28 @@
 /**
- * Distributed-mutex primitive for the persistence layer.
+ * Distributed-mutex primitive for multi-instance coordination.
+ *
+ * Locks are **not** part of {@link AIPersistenceStores}. State persistence
+ * (messages/runs/interrupts/metadata) and mutual exclusion are separate
+ * concerns: wire locks with {@link withLocks} (or pass a `LockStore` into
+ * consumers that need one), not via `composePersistence`.
  *
  * ponytail: the `'locks'` capability token is defined LOCALLY here. Capability
  * identity is by object reference (see `createCapability`), not by name, so this
  * token does NOT interoperate with the identically-named `LocksCapability` that
  * `@tanstack/ai-sandbox` owns. That is fine for this batch: the only consumer of
- * a persistence-provided lock store is `withSandbox`, and sandbox persistence is
- * deferred. When it lands, share ONE handle between provider and consumer (the
- * neutral home is core `@tanstack/ai`); until then this token has no cross-package
- * consumer and just keeps the persistence API self-contained.
+ * a provided lock store is `withSandbox`, and sandbox persistence is deferred.
+ * When it lands, share ONE handle between provider and consumer (the neutral
+ * home is core `@tanstack/ai`); until then this token has no cross-package
+ * consumer and just keeps the API self-contained.
  */
 import { createCapability } from '@tanstack/ai'
 
 /**
- * Mutual exclusion around a critical section keyed by `key`. A cloudflare
- * Durable Object store is the only backend here that is safe across instances;
- * the in-memory default is correct within a single process only. Lease-backed
- * implementations abort `signal` as soon as ownership can no longer be
- * guaranteed; the callback must stop externally visible mutations when it aborts.
+ * Mutual exclusion around a critical section keyed by `key`. A Cloudflare
+ * Durable Object store is the reference multi-instance backend; the in-memory
+ * default is correct within a single process only. Lease-backed implementations
+ * abort `signal` as soon as ownership can no longer be guaranteed; the callback
+ * must stop externally visible mutations when it aborts.
  */
 export interface LockStore {
   withLock: <T>(
@@ -26,7 +31,7 @@ export interface LockStore {
   ) => Promise<T>
 }
 
-/** The lock capability. Provided by `withPersistence` when a `locks` store is present. */
+/** The lock capability. Provided by {@link withLocks}. */
 export const LocksCapability = createCapability<LockStore>()('locks')
 
 /** Destructured accessors: `getLocks(ctx)` / `provideLocks(ctx, store)`. */
@@ -34,7 +39,8 @@ export const [getLocks, provideLocks] = LocksCapability
 
 /**
  * In-memory {@link LockStore} — a per-key promise chain. Correct within a single
- * process; multi-instance correctness needs a distributed lock from the backend.
+ * process; multi-instance correctness needs a distributed lock (e.g. Cloudflare
+ * Durable Objects via `@tanstack/ai-persistence-cloudflare`).
  */
 export class InMemoryLockStore implements LockStore {
   private readonly chains = new Map<string, Promise<unknown>>()

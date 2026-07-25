@@ -226,8 +226,8 @@ export async function POST(request: Request) {
 }
 ```
 
-`drizzlePersistence` provides all state stores except `locks`: this backend has
-no distributed lock, so consumers that need one fall back to an in-process
-lock. When multiple workers must share a lock service, use `composePersistence`
-to add a distributed `locks` implementation — for example the Cloudflare
-Durable Object lock from `@tanstack/ai-persistence-cloudflare`.
+`drizzlePersistence` provides state stores only (messages, runs, interrupts,
+metadata). Locks are separate: use `withLocks` with a distributed `LockStore`
+(for example `createDurableObjectLockStore` from
+`@tanstack/ai-persistence-cloudflare`) when multi-instance coordination is
+required.

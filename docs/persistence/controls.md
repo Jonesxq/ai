@@ -5,23 +5,45 @@ id: controls
 
 # Persistence Controls
 
-Persistence has no feature flags. What you persist is decided by which stores
-the backend provides, and you compose backends per store. Supply only the
+Persistence has no feature flags. What you persist is decided by which **state**
+stores the backend provides, and you compose backends per store. Supply only the
 stores your workflow needs.
 
-## What each store gives you
+Locks are a **separate** concern — see [Locks](#locks-coordination) below.
+
+## Named shapes (prefer these)
+
+| Type | Required stores | Use |
+| --- | --- | --- |
+| `ChatTranscriptStores` / `ChatTranscriptPersistence` | `messages` (optional runs/interrupts/metadata) | Floor for `withPersistence` / `reconstructChat` |
+| `ChatPersistenceStores` / `ChatPersistence` | `messages` + `runs` + `interrupts` + `metadata` | Packaged backends (`memoryPersistence`, Drizzle, Prisma, D1) |
+| `ChatWithInterruptsStores` / `ChatWithInterruptsPersistence` | `messages` + `runs` + `interrupts` | HITL without requiring metadata |
+
+There is no public sparse `AIPersistenceStores` export — use a named shape or
+`AIPersistence<{ messages: MessageStore, … }>` for custom maps.
+`defineAIPersistence` / `composePersistence` still accept sparse maps by
+inference.
+
+## What each state store gives you
 
 | Requirement | Store |
 | --- | --- |
-| Authoritative server transcript | `messages` |
-| Run status and usage | `runs` |
+| Authoritative server transcript | `messages` (**required** by `withPersistence` / `reconstructChat`) |
+| Run status and usage | `runs` (required on `ChatPersistence`; required when `interrupts` is set) |
 | Durable approvals or human input | `interrupts` (requires `runs`) |
-| App or integration checkpoints | `metadata` |
-| Cross-worker coordination | `locks` |
+| App or integration checkpoints | `metadata` (always optional) |
 
-`withPersistence(persistence)` and `withGenerationPersistence(persistence)`
-inspect the stores that are present. Store presence is the whole capability
-selection mechanism.
+`withPersistence(persistence)` inspects the stores that are present. Store
+presence is the capability selection mechanism for optional chat features.
+
+## Entrypoint requirements
+
+| Entrypoint | Shape | Notes |
+| --- | --- | --- |
+| `withPersistence` | `ChatTranscriptStores` floor | `interrupts` ⇒ `runs` |
+| `reconstructChat` | `ChatTranscriptStores` | `runs` / `interrupts` enrich the response when present |
+| Packaged `*Persistence()` | `ChatPersistence` | messages + runs (+ interrupts + metadata) |
+| `defineAIPersistence` / `composePersistence` | sparse by inference | Prefer a named shape for the result |
 
 ## Compose and override stores
 
@@ -54,9 +76,9 @@ Each override is independent:
 ```ts
 import { composePersistence, memoryPersistence } from '@tanstack/ai-persistence'
 
-// Drop the locks store entirely; the resulting type has no `locks` key.
-const withoutLocks = composePersistence(memoryPersistence(), {
-  overrides: { locks: false },
+// Drop metadata; the resulting type has no `metadata` key.
+const withoutMetadata = composePersistence(memoryPersistence(), {
+  overrides: { metadata: false },
 })
 ```
 
@@ -65,10 +87,36 @@ values arrive from untyped JavaScript.
 
 ## Valid store combinations
 
-`interrupts` requires `runs`: an interrupt record is scoped to a run, so
-`withPersistence` rejects a persistence object that has `interrupts` without
-`runs`. Everything else is independent, add stores as the workflow needs them.
+- `withPersistence` requires `messages`.
+- `interrupts` requires `runs`: an interrupt record is scoped to a run.
+- `withGenerationPersistence` requires `runs`.
 
 To define a partial backend directly rather than by composing, use
 `defineAIPersistence({ stores: { ... } })` and pass only the stores you have.
 See [Custom stores](./custom-stores) for the store contracts.
+
+## Locks (coordination)
+
+Locks are **not** state stores. They do not live on `AIPersistence` and cannot
+be composed with `composePersistence`. Provide them with a separate middleware:
+
+```ts
+import {
+  withPersistence,
+  withLocks,
+  InMemoryLockStore,
+} from '@tanstack/ai-persistence'
+import { createDurableObjectLockStore } from '@tanstack/ai-persistence-cloudflare'
+
+middleware: [
+  withPersistence(persistence),
+  // Single process:
+  withLocks(new InMemoryLockStore()),
+  // Multi-instance (Cloudflare):
+  // withLocks(createDurableObjectLockStore(env.AI_LOCKS)),
+]
+```
+
+`withLocks` provides `LocksCapability` for downstream middleware (e.g. sandbox).
+It does not lock the whole chat turn automatically — take a per-thread lock in
+your own middleware when multi-writer coordination is required.

@@ -5,10 +5,15 @@ import {
   memoryPersistence,
   withPersistence,
   withGenerationPersistence,
+  withLocks,
+  InMemoryLockStore,
 } from '../src'
 import type { LockStore } from '../src/locks'
 import type {
   AIPersistence,
+  ChatPersistence,
+  ChatTranscriptPersistence,
+  ChatTranscriptStores,
   InterruptStore,
   MessageStore,
   MetadataStore,
@@ -39,6 +44,9 @@ messagesOnly.stores.runs
 
 // @ts-expect-error persistence aggregates accept only registered store keys
 defineAIPersistence({ stores: { unknownStore: messages } })
+
+// @ts-expect-error locks are not a state store key
+defineAIPersistence({ stores: { messages, locks } })
 
 type InvalidExplicitStores = {
   messages: MessageStore
@@ -76,6 +84,9 @@ expectTypeOf(multiple.stores.interrupts).toEqualTypeOf<InterruptStore>()
 // @ts-expect-error persistence overrides accept only registered store keys
 composePersistence(base, { overrides: { unknownStore: messages } })
 
+// @ts-expect-error locks cannot be composed as a state store override
+composePersistence(base, { overrides: { locks } })
+
 const removed = composePersistence(base, {
   overrides: { runs: false, interrupts: false },
 })
@@ -109,13 +120,25 @@ const uncertainInherited = composePersistence(base, {
 })
 expectTypeOf(uncertainInherited.stores.messages).toEqualTypeOf<MessageStore>()
 
-withPersistence(messagesOnly)
-withPersistence(defineAIPersistence({ stores: { runs } }))
-withPersistence(defineAIPersistence({ stores: { runs, interrupts, messages } }))
-// @ts-expect-error a known interrupt store requires a known run store
-withPersistence(defineAIPersistence({ stores: { interrupts } }))
+// Named shapes
+expectTypeOf(memoryPersistence()).toEqualTypeOf<ChatPersistence>()
+const transcript: ChatTranscriptPersistence = messagesOnly
+void transcript
+declare const fullChat: ChatPersistence
+withPersistence(fullChat)
 
+// Chat requires messages (named floor: ChatTranscriptStores)
+withPersistence(messagesOnly)
+withPersistence(defineAIPersistence({ stores: { runs, interrupts, messages } }))
+// @ts-expect-error chat persistence requires messages
+withPersistence(defineAIPersistence({ stores: { runs } }))
+// @ts-expect-error a known interrupt store requires a known run store
+withPersistence(defineAIPersistence({ stores: { interrupts, messages } }))
+
+// Generation requires runs
 withGenerationPersistence(defineAIPersistence({ stores: { runs } }))
+// @ts-expect-error generation persistence requires runs
+withGenerationPersistence(messagesOnly)
 
 const chatWithRemovedRuns = composePersistence(base, {
   overrides: { runs: false },
@@ -123,18 +146,23 @@ const chatWithRemovedRuns = composePersistence(base, {
 // @ts-expect-error composition carries the missing run dependency into chat
 withPersistence(chatWithRemovedRuns)
 
-declare const broadPersistence: AIPersistence
-declare const dynamicChatPersistence: AIPersistence<{
-  runs?: RunStore
-  interrupts?: InterruptStore
-}>
-withPersistence(broadPersistence)
-withPersistence(dynamicChatPersistence)
-withGenerationPersistence(broadPersistence)
-
-const memoryWithCustomLocks = composePersistence(memoryPersistence(), {
-  overrides: { locks },
+const chatWithRemovedMessages = composePersistence(base, {
+  overrides: { messages: false },
 })
-expectTypeOf(memoryWithCustomLocks.stores.locks).toEqualTypeOf<LockStore>()
-const mutableMemoryPersistence = memoryPersistence()
-mutableMemoryPersistence.stores.locks = locks
+// @ts-expect-error composition without messages is invalid for chat
+withPersistence(chatWithRemovedMessages)
+
+// Sparse AIPersistence is still usable for define/compose; chat entrypoints
+// need ChatTranscriptStores (messages present).
+declare const sparseRunsOnly: AIPersistence<{ runs: RunStore }>
+// @ts-expect-error sparse runs-only is not ChatTranscriptStores
+withPersistence(sparseRunsOnly)
+
+declare const dynamicChat: AIPersistence<ChatTranscriptStores>
+withPersistence(dynamicChat)
+
+// Locks are a separate middleware, not a store key
+expectTypeOf(withLocks(locks)).not.toBeNever()
+expectTypeOf(withLocks(new InMemoryLockStore())).not.toBeNever()
+// memoryPersistence is ChatPersistence (no locks key)
+expectTypeOf(memoryPersistence().stores).not.toHaveProperty('locks')

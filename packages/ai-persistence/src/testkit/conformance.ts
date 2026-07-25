@@ -1,14 +1,17 @@
 /**
- * Shared conformance suite for the `AIPersistence` state contract.
+ * Shared conformance suite for the `AIPersistence` **state** contract.
  *
- * Every backend (memory, drizzle, prisma, cloudflare, …) runs this identical
+ * Every backend (memory, drizzle, prisma, cloudflare D1, …) runs this identical
  * suite so that schema drift or an implementation gap fails immediately. It
  * exercises every method of every store the persistence exposes and is the
  * authoritative compatibility gate for the store interfaces in `../types.ts`.
  *
- * SKIPPING: a backend that deliberately omits a store (e.g. drizzle has no
- * `locks`) must declare it in `options.skip`. A store that is absent AND not
- * listed in `skip` fails the suite loudly — silent gaps are not allowed.
+ * Locks are not part of this suite — they are a separate coordination concern
+ * (`LockStore` + `withLocks`), not state stores.
+ *
+ * SKIPPING: a backend that deliberately omits a state store must declare it in
+ * `options.skip`. A store that is absent AND not listed in `skip` fails the
+ * suite loudly — silent gaps are not allowed.
  */
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { ModelMessage } from '@tanstack/ai'
@@ -422,61 +425,6 @@ export function runPersistenceConformance(
         await store.delete('a:b', 'c')
         expect(await store.get('a:b', 'c')).toBeNull()
         expect(await store.get('a', 'b:c')).toBe('right')
-      })
-    })
-    describe('locks', () => {
-      it('runs the critical section and returns its value', async () => {
-        const store = resolveStore('locks')
-        if (!store) return
-
-        const order: Array<string> = []
-        const result = await store.withLock('lock-key', () => {
-          order.push('inside')
-          return Promise.resolve(42)
-        })
-        expect(result).toBe(42)
-        expect(order).toEqual(['inside'])
-      })
-
-      it('serializes concurrent holders of the same key (mutual exclusion)', async () => {
-        const store = resolveStore('locks')
-        if (!store) return
-
-        let active = 0
-        let overlaps = 0
-        const enterExit = async () => {
-          active += 1
-          if (active > 1) overlaps += 1
-          // Yield so a second critical section would interleave if the lock
-          // failed to exclude it.
-          await Promise.resolve()
-          await Promise.resolve()
-          active -= 1
-        }
-
-        await Promise.all([
-          store.withLock('mx-key', enterExit),
-          store.withLock('mx-key', enterExit),
-          store.withLock('mx-key', enterExit),
-        ])
-
-        expect(overlaps).toBe(0)
-      })
-
-      it('releases the lock when the critical section throws', async () => {
-        const store = resolveStore('locks')
-        if (!store) return
-
-        await expect(
-          store.withLock('throw-key', () => Promise.reject(new Error('boom'))),
-        ).rejects.toThrow('boom')
-
-        // The lock must have been released despite the throw: a subsequent
-        // acquisition runs rather than deadlocking.
-        const result = await store.withLock('throw-key', () =>
-          Promise.resolve('recovered'),
-        )
-        expect(result).toBe('recovered')
       })
     })
   })

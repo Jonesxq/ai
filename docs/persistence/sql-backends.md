@@ -67,21 +67,21 @@ constructing the adapter. See [Prisma](./prisma).
 
 ## Store coverage
 
-Both adapters provide messages, runs, interrupts, and metadata. Neither
-provides a `locks` store; add a distributed store when multiple processes can
-mutate the same run. A distributed lock must implement the `LockStore` contract
-from `@tanstack/ai-persistence`:
+Both adapters provide **state** stores: messages, runs, interrupts, and
+metadata. Locks are a separate concern — when multiple processes can mutate the
+same critical section, add `withLocks` with a distributed `LockStore`:
 
 ```ts
-import { composePersistence } from '@tanstack/ai-persistence'
+import { withPersistence, withLocks } from '@tanstack/ai-persistence'
 import { persistence } from './persistence'
 import { distributedLocks } from './locks'
 
-const coordinated = composePersistence(persistence, {
-  overrides: { locks: distributedLocks },
-})
+middleware: [
+  withPersistence(persistence),
+  withLocks(distributedLocks),
+]
 ```
 
-For Cloudflare-native state, [Cloudflare Persistence](./cloudflare) combines
-D1 and Durable Object locks. For another SQL library, start with
+For Cloudflare-native state and Durable Object locks, see
+[Cloudflare Persistence](./cloudflare). For another SQL library, start with
 [Custom Stores](./custom-stores).
