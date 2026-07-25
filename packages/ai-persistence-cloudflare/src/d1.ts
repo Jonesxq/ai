@@ -5,10 +5,13 @@ import {
 } from '@tanstack/ai-persistence-drizzle'
 
 /**
- * Create the structured stores owned by a migrated Cloudflare D1 binding.
+ * Create the structured stores over a Cloudflare D1 binding.
  *
- * Apply this package's D1 migrations (or equivalent DDL matching the default
- * schema) before use — the drizzle adapter does not ship or apply migrations.
+ * Thin wrapper: stock SQLite schema + `drizzle-orm/d1` +
+ * {@link drizzlePersistence}. This package does **not** ship or apply DDL —
+ * migrate tables with your own drizzle-kit journal (or equivalent SQL matching
+ * the default schema) before use. For custom table names/columns, own a schema
+ * from `tanstack-ai-drizzle-schema` and call `drizzlePersistence` yourself.
  */
 export function createD1Stores(d1: D1Database) {
   const schema = createDefaultSqliteSchema()

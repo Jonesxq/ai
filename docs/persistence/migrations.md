@@ -53,16 +53,25 @@ a migration system — see [Drizzle](./drizzle).
 
 ## Cloudflare D1
 
-The Cloudflare package provides D1-specific migration assets for Wrangler:
+D1 is SQLite. Use the same **schema-first Drizzle** workflow as above — this
+package does **not** ship D1 SQL.
+
+1. Re-export `@tanstack/ai-persistence-drizzle/sqlite-schema` or emit a starter
+   with `tanstack-ai-drizzle-schema`.
+2. Generate migrations with drizzle-kit (`dialect: 'sqlite'`).
+3. Point Wrangler `d1_databases[].migrations_dir` at that journal and apply:
 
 ```bash
-pnpm exec tanstack-ai-cloudflare-migrations --out migrations
+wrangler d1 migrations apply tanstack-ai-state --local
 wrangler d1 migrations apply tanstack-ai-state --remote
 ```
 
-It also exports `d1Migrations` for programmatic tooling. Durable Object locks
-do not use the D1 table migration set; configure their bindings and Durable
-Object migration tags in Wrangler.
+Runtime: `cloudflarePersistence({ d1 })` (stock schema) or
+`drizzlePersistence(drizzle(d1, { schema }), { provider: 'sqlite', schema })`
+for a project-owned schema. See [Cloudflare](./cloudflare).
+
+Durable Object **locks** do not use the D1 table journal — configure their
+bindings and Durable Object migration tags in Wrangler separately.
 
 ## Prisma
 

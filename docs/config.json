@@ -295,7 +295,7 @@
           "label": "Migrations",
           "to": "persistence/migrations",
           "addedAt": "2026-07-22",
-          "updatedAt": "2026-07-24"
+          "updatedAt": "2026-07-25"
         },
         {
           "label": "Internals",

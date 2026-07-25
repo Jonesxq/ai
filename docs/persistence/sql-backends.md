@@ -82,6 +82,7 @@ middleware: [
 ]
 ```
 
-For Cloudflare-native state and Durable Object locks, see
+For Cloudflare D1, use the Drizzle SQLite path above (or the thin
+`cloudflarePersistence({ d1 })` wrapper). Durable Object locks live in
 [Cloudflare Persistence](./cloudflare). For another SQL library, start with
 [Custom Stores](./custom-stores).

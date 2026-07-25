@@ -4,30 +4,37 @@ import { describe, expect, it } from 'vitest'
 import packageJson from '../package.json'
 
 describe('Cloudflare package contract', () => {
-  it('starts at 0.0.1 and publishes the root, CLI, and D1 assets', () => {
+  it('publishes the root entry only — no migration CLI or shipped SQL', () => {
     expect(packageJson.exports).toEqual({
       '.': {
         types: './dist/esm/index.d.ts',
         import: './dist/esm/index.js',
       },
     })
-    expect(packageJson.bin).toEqual({
-      'tanstack-ai-cloudflare-migrations':
-        './bin/tanstack-ai-cloudflare-migrations.mjs',
-    })
-    expect(packageJson.files).toEqual(
-      expect.arrayContaining(['bin', 'dist', 'migrations', 'src']),
-    )
+    expect(packageJson).not.toHaveProperty('bin')
+    expect(packageJson.files).toEqual(['dist', 'src'])
+    expect(packageJson.description.toLowerCase()).toMatch(/drizzle|d1/)
+    expect(packageJson.description.toLowerCase()).toMatch(/lock/)
   })
 
-  it('keeps Node built-ins, Buffer, and the CLI out of the root graph', async () => {
-    const rootFiles = [
-      'bindings.ts',
-      'd1.ts',
-      'index.ts',
-      'locks.ts',
-      'migrations.ts',
-    ]
+  it('does not ship D1 migration SQL or a migrations CLI', async () => {
+    const root = fileURLToPath(new URL('..', import.meta.url))
+    await expect(
+      readFile(`${root}/migrations/0000_tanstack_ai_initial.sql`, 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(
+      readFile(
+        `${root}/src/assets/0000_tanstack_ai_initial.sql`,
+        'utf8',
+      ),
+    ).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(
+      readFile(`${root}/bin/tanstack-ai-cloudflare-migrations.mjs`, 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('keeps Node built-ins, Buffer, and migration tooling out of the root graph', async () => {
+    const rootFiles = ['bindings.ts', 'd1.ts', 'index.ts', 'locks.ts']
     for (const filename of rootFiles) {
       const contents = await readFile(
         fileURLToPath(new URL(`../src/${filename}`, import.meta.url)),
@@ -40,7 +47,9 @@ describe('Cloudflare package contract', () => {
       fileURLToPath(new URL('../src/index.ts', import.meta.url)),
       'utf8',
     )
-    expect(root).not.toMatch(/migration-cli/)
-    expect(root).not.toMatch(/\.\/cli/)
+    expect(root).not.toMatch(/d1Migrations/)
+    expect(root).not.toMatch(/from ['"]\.\/migrations['"]/)
+    expect(root).not.toMatch(/from ['"]\.\/migration-cli['"]/)
+    expect(root).not.toMatch(/from ['"]\.\/cli['"]/)
   })
 })

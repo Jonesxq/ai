@@ -10,12 +10,18 @@ primitives. **State** and **locks** are separate:
 
 | Binding | What it provides | How you wire it |
 | --- | --- | --- |
-| D1 | State stores: `messages`, `runs`, `interrupts`, `metadata` | `cloudflarePersistence({ d1 })` + `withPersistence` |
+| D1 | State stores: `messages`, `runs`, `interrupts`, `metadata` | `cloudflarePersistence({ d1 })` (Drizzle under the hood) + `withPersistence` |
 | Durable Objects | Distributed `LockStore` | `createDurableObjectLockStore` + `withLocks` |
 
-This package persists state (and optionally provides locks). It does not provide
-a stream-delivery adapter; stream re-attach / delivery durability is a separate
-transport-layer feature ([Resumable Streams](../resumable-streams/overview)).
+D1 state is a thin convenience over
+`@tanstack/ai-persistence-drizzle` + `drizzle-orm/d1`. This package does **not**
+ship SQL migrations — schema ownership matches every other SQLite backend (see
+[Drizzle](./drizzle) and [Migrations](./migrations)). The Cloudflare-specific
+value is Durable Object locks and D1 binding wiring.
+
+This package does not provide a stream-delivery adapter; stream re-attach /
+delivery durability is a separate transport-layer feature
+([Resumable Streams](../resumable-streams/overview)).
 
 ## Configure bindings
 
@@ -27,7 +33,7 @@ transport-layer feature ([Resumable Streams](../resumable-streams/overview)).
       "binding": "AI_STATE",
       "database_name": "tanstack-ai-state",
       "database_id": "<database-id>",
-      "migrations_dir": "migrations"
+      "migrations_dir": "drizzle"
     }
   ],
   "durable_objects": {
@@ -47,13 +53,41 @@ transport-layer feature ([Resumable Streams](../resumable-streams/overview)).
 }
 ```
 
-Re-export the lock Durable Object from your Worker entry when you use locks:
+Point `migrations_dir` at **your** drizzle-kit output (or any SQL journal you
+own). Re-export the lock Durable Object from your Worker entry when you use
+locks:
 
 ```ts
 export { CloudflareLockDurableObject } from '@tanstack/ai-persistence-cloudflare'
 ```
 
+## Schema and migrations (D1 = SQLite)
+
+Same path as Drizzle SQLite. Stock tables:
+
+```ts
+// src/db/tanstack-ai-schema.ts
+export * from '@tanstack/ai-persistence-drizzle/sqlite-schema'
+```
+
+Or emit an owned starter:
+
+```bash
+pnpm exec tanstack-ai-drizzle-schema --out src/db
+```
+
+Generate DDL with drizzle-kit (`dialect: 'sqlite'`), put the journal where
+Wrangler expects it, and apply:
+
+```bash
+pnpm exec drizzle-kit generate
+wrangler d1 migrations apply tanstack-ai-state --local
+wrangler d1 migrations apply tanstack-ai-state --remote
+```
+
 ## Create state persistence (D1)
+
+Zero-config stock schema (tables must already exist from your migrations):
 
 ```ts ignore
 import { cloudflarePersistence } from '@tanstack/ai-persistence-cloudflare'
@@ -67,8 +101,25 @@ export function createPersistence(env: Env) {
 }
 ```
 
-D1 stores structured records in SQLite tables. Apply this package's D1
-migrations before use — see [Migrations](./migrations).
+Prefer owning the schema and calling Drizzle directly when you rename tables or
+add columns:
+
+```ts ignore
+import { drizzle } from 'drizzle-orm/d1'
+import { drizzlePersistence } from '@tanstack/ai-persistence-drizzle'
+import { schema } from './db/tanstack-ai-schema'
+
+interface Env {
+  AI_STATE: D1Database
+}
+
+export function createPersistence(env: Env) {
+  return drizzlePersistence(drizzle(env.AI_STATE, { schema }), {
+    provider: 'sqlite',
+    schema,
+  })
+}
+```
 
 ## Optional: Durable Object locks
 
@@ -139,31 +190,6 @@ export default {
 ```
 
 State-only setups omit `withLocks` and the DO binding entirely.
-
-## Apply D1 migrations
-
-The package exports an ordered `d1Migrations` manifest and a CLI. Copy the SQL
-into the directory managed by Wrangler:
-
-```bash
-pnpm exec tanstack-ai-cloudflare-migrations --out migrations
-wrangler d1 migrations apply tanstack-ai-state --local
-wrangler d1 migrations apply tanstack-ai-state --remote
-```
-
-Use `--stdout` to print the ordered SQL. Existing divergent files are not
-overwritten unless `--force` is passed. Commit the copied migrations and apply
-them before deploying code that uses the stores.
-
-Programmatic tooling can read the same manifest:
-
-```ts
-import { d1Migrations } from '@tanstack/ai-persistence-cloudflare'
-
-for (const migration of d1Migrations) {
-  console.log(migration.filename)
-}
-```
 
 ## Override selected stores
 

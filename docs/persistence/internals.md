@@ -111,7 +111,8 @@ Packaged backends own resources differently:
   drizzle-kit owns migrations). The root import is edge-safe. The `/sqlite`
   entry creates a Node SQLite connection with stock defaults.
 - Prisma accepts the application's generated and migrated client.
-- Cloudflare maps D1 to structured state stores; Durable Object locks are a
+- Cloudflare is a thin D1 convenience over Drizzle SQLite (`drizzle-orm/d1`);
+  schema DDL is owned the same way as Drizzle. Durable Object locks are a
   separate export (`createDurableObjectLockStore` + `withLocks`).
 
 `composePersistence` does not add distributed transactions. When related

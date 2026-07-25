@@ -1,13 +1,31 @@
 /// <reference types="@cloudflare/workers-types" />
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Miniflare } from 'miniflare'
+import {
+  createDefaultSqliteSchema,
+  ensureSqliteTables,
+} from '@tanstack/ai-persistence-drizzle'
 import { runPersistenceConformance } from '@tanstack/ai-persistence/testkit'
-import { cloudflarePersistence, d1Migrations } from '../src/index'
+import { cloudflarePersistence } from '../src/index'
 import { composePersistence } from '@tanstack/ai-persistence'
 import type { ChatPersistence, InterruptStore } from '@tanstack/ai-persistence'
 
 interface RuntimeBindings {
   AI_DB: D1Database
+}
+
+/**
+ * Bootstrap stock tables on a Miniflare D1 binding the same way production
+ * apps do: derive DDL from the Drizzle SQLite schema SoT (not package-owned
+ * migration SQL).
+ */
+async function ensureDefaultTables(d1: D1Database): Promise<void> {
+  const schema = createDefaultSqliteSchema()
+  const statements: Array<string> = []
+  ensureSqliteTables((sql) => {
+    statements.push(sql)
+  }, schema)
+  await d1.batch(statements.map((statement) => d1.prepare(statement)))
 }
 
 describe('Cloudflare persistence on Miniflare bindings', () => {
@@ -22,15 +40,7 @@ describe('Cloudflare persistence on Miniflare bindings', () => {
       script: 'export default { fetch() { return new Response("ok") } }',
     })
     const bindings = await miniflare.getBindings<RuntimeBindings>()
-    for (const migration of d1Migrations) {
-      const statements = migration.sql
-        .split('--> statement-breakpoint')
-        .map((statement) => statement.trim())
-        .filter((statement) => statement.length > 0)
-      await bindings.AI_DB.batch(
-        statements.map((statement) => bindings.AI_DB.prepare(statement)),
-      )
-    }
+    await ensureDefaultTables(bindings.AI_DB)
     persistence = cloudflarePersistence({
       d1: bindings.AI_DB,
     })
