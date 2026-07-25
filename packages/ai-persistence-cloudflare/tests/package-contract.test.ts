@@ -23,10 +23,7 @@ describe('Cloudflare package contract', () => {
       readFile(`${root}/migrations/0000_tanstack_ai_initial.sql`, 'utf8'),
     ).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(
-      readFile(
-        `${root}/src/assets/0000_tanstack_ai_initial.sql`,
-        'utf8',
-      ),
+      readFile(`${root}/src/assets/0000_tanstack_ai_initial.sql`, 'utf8'),
     ).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(
       readFile(`${root}/bin/tanstack-ai-cloudflare-migrations.mjs`, 'utf8'),
