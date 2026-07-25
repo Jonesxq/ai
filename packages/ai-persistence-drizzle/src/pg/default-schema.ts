@@ -30,7 +30,9 @@ import type { TanstackAiPgSchema } from '../core/schema-contract'
 /** Thread message history (`MessageStore`). */
 export const messages = pgTable('messages', {
   threadId: text('thread_id').primaryKey(),
-  messagesJson: jsonb('messages_json').$type<Array<ModelMessage>>().notNull(),
+  messagesJson: jsonb('messages_json')
+    .$type<Array<ModelMessage>>()
+    .notNull(),
 })
 
 /** Run lifecycle records (`RunStore`). */
