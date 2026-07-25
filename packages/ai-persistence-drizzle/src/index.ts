@@ -15,9 +15,7 @@
  * convenience factory (default schema + optional runtime table bootstrap)
  * lives at `@tanstack/ai-persistence-drizzle/sqlite`.
  */
-export {
-  drizzlePersistence,
-} from './core/persistence'
+export { drizzlePersistence } from './core/persistence'
 export type {
   DrizzlePgDb,
   DrizzlePersistence,
@@ -35,7 +33,10 @@ export {
   drizzleSchemaSources,
   drizzleSchemaSource,
 } from './core/schema-source'
-export { DrizzleSchemaError, assertTanstackAiSchema } from './core/schema-contract'
+export {
+  DrizzleSchemaError,
+  assertTanstackAiSchema,
+} from './core/schema-contract'
 export type {
   DrizzleProvider,
   TanstackAiPgSchema,
