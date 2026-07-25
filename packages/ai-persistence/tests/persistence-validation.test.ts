@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  withGenerationPersistence,
-  withPersistence,
-} from '../src/middleware'
+import { withGenerationPersistence, withPersistence } from '../src/middleware'
 import { reconstructChat } from '../src/reconstruct'
 import { defineAIPersistence } from '../src/types'
 import type { ChatTranscriptPersistence } from '../src/types'

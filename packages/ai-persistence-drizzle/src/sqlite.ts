@@ -64,7 +64,9 @@ export interface SqlitePersistenceOptions {
  * })
  * ```
  */
-export function sqlitePersistence(options: SqlitePersistenceOptions): ChatPersistence & {
+export function sqlitePersistence(
+  options: SqlitePersistenceOptions,
+): ChatPersistence & {
   /** Close the underlying Node SQLite connection. */
   close: () => void
 } {

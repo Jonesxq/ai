@@ -29,8 +29,12 @@ expectTypeOf(cloudflarePersistence({ d1 }).stores).toMatchTypeOf<{
   metadata?: MetadataStore
 }>()
 // Packaged backends always provide all four state stores:
-expectTypeOf(cloudflarePersistence({ d1 }).stores.messages).toEqualTypeOf<MessageStore>()
-expectTypeOf(cloudflarePersistence({ d1 }).stores.runs).toEqualTypeOf<RunStore>()
+expectTypeOf(
+  cloudflarePersistence({ d1 }).stores.messages,
+).toEqualTypeOf<MessageStore>()
+expectTypeOf(
+  cloudflarePersistence({ d1 }).stores.runs,
+).toEqualTypeOf<RunStore>()
 
 // Locks are a separate export — not part of the state bag.
 expectTypeOf(

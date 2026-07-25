@@ -1,6 +1,10 @@
 import { expectTypeOf } from 'vitest'
 import { PrismaClient } from '@prisma/client'
-import type { ChatPersistence, MessageStore, RunStore } from '@tanstack/ai-persistence'
+import type {
+  ChatPersistence,
+  MessageStore,
+  RunStore,
+} from '@tanstack/ai-persistence'
 import { prismaPersistence } from '../src/index'
 import type {
   InterruptDelegate,
