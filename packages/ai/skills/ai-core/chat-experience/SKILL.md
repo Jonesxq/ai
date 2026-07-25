@@ -766,4 +766,5 @@ If not handled, the UI appears to hang with no feedback.
 
 - See also: **ai-core/tool-calling/SKILL.md** -- Most chats include tools
 - See also: **ai-core/adapter-configuration/SKILL.md** -- Adapter choice affects available features
-- See also: **ai-core/middleware/SKILL.md** -- Use middleware for analytics and lifecycle events; `withPersistence` is the server (authoritative) half of the client `persistence` option
+- See also: **ai-core/middleware/SKILL.md** -- Use middleware for analytics and lifecycle events
+- See also: **ai-core/persistence/SKILL.md** -- Server + client state persistence, backends, custom stores (deeper than Pattern 8)
