@@ -37,11 +37,11 @@ import {
 
 ## Adapters
 
-| Adapter | Survives | Notes |
-| --- | --- | --- |
-| `localStoragePersistence()` | Reloads + browser restarts | Sync hydrate; quota-bound; JSON codec default |
-| `sessionStoragePersistence()` | Reloads in the same tab | Cleared when tab/session ends |
-| `indexedDBPersistence()` | Reloads + restarts | Async open (first paint may be empty briefly); structured clone |
+| Adapter                       | Survives                   | Notes                                                           |
+| ----------------------------- | -------------------------- | --------------------------------------------------------------- |
+| `localStoragePersistence()`   | Reloads + browser restarts | Sync hydrate; quota-bound; JSON codec default                   |
+| `sessionStoragePersistence()` | Reloads in the same tab    | Cleared when tab/session ends                                   |
+| `indexedDBPersistence()`      | Reloads + restarts         | Async open (first paint may be empty briefly); structured clone |
 
 All default to the chat persisted-state shape — no type argument or codec
 required for normal use.

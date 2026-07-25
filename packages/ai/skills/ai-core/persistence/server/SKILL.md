@@ -59,12 +59,12 @@ resolves pending interrupts.
 
 ## What each store does
 
-| Store | Role | Required? |
-| --- | --- | --- |
-| `messages` | Full model-message transcript load/save | **Yes** for `withPersistence` |
-| `runs` | Run status, timing, usage, errors | Optional; needed for interrupt durability |
-| `interrupts` | Pending/resolved tool approvals & waits | Optional; **requires** `runs` |
-| `metadata` | App-owned namespaced key/value | Optional |
+| Store        | Role                                    | Required?                                 |
+| ------------ | --------------------------------------- | ----------------------------------------- |
+| `messages`   | Full model-message transcript load/save | **Yes** for `withPersistence`             |
+| `runs`       | Run status, timing, usage, errors       | Optional; needed for interrupt durability |
+| `interrupts` | Pending/resolved tool approvals & waits | Optional; **requires** `runs`             |
+| `metadata`   | App-owned namespaced key/value          | Optional                                  |
 
 Named shapes: `ChatTranscriptPersistence` (floor), `ChatPersistence` (all four —
 what packaged backends return). Prefer those over a sparse bag type.
@@ -77,14 +77,14 @@ what packaged backends return). Prefer those over a sparse bag type.
 
 ## When state is written
 
-| Moment | Writes | Best-effort? |
-| --- | --- | --- |
-| `onStart` | Pending turn snapshot (user + history) | Yes — failure does not abort |
-| Interrupt boundary | New interrupts, run → `interrupted`, message snapshot | No |
-| `onFinish` | Full transcript **first**, then run → `completed`, commit resumes | No |
-| Stream (optional) | Throttled partial assistant text | Yes if `snapshotStreaming: true` |
-| `onError` | Run → `failed` | Resumes stay pending |
-| `onAbort` | Run → `interrupted` | Resumes stay pending |
+| Moment             | Writes                                                            | Best-effort?                     |
+| ------------------ | ----------------------------------------------------------------- | -------------------------------- |
+| `onStart`          | Pending turn snapshot (user + history)                            | Yes — failure does not abort     |
+| Interrupt boundary | New interrupts, run → `interrupted`, message snapshot             | No                               |
+| `onFinish`         | Full transcript **first**, then run → `completed`, commit resumes | No                               |
+| Stream (optional)  | Throttled partial assistant text                                  | Yes if `snapshotStreaming: true` |
+| `onError`          | Run → `failed`                                                    | Resumes stay pending             |
+| `onAbort`          | Run → `interrupted`                                               | Resumes stay pending             |
 
 ```ts
 withPersistence(persistence, {

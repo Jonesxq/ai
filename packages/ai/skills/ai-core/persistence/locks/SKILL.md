@@ -51,9 +51,9 @@ who consumes the capability.
 
 ## Implementations
 
-| Store | Package | Use when |
-| --- | --- | --- |
-| `InMemoryLockStore` | `@tanstack/ai-persistence` | Single process, tests, local |
+| Store                              | Package                               | Use when                     |
+| ---------------------------------- | ------------------------------------- | ---------------------------- |
+| `InMemoryLockStore`                | `@tanstack/ai-persistence`            | Single process, tests, local |
 | `createDurableObjectLockStore(ns)` | `@tanstack/ai-persistence-cloudflare` | Multiple Workers / instances |
 
 ### Cloudflare Durable Objects

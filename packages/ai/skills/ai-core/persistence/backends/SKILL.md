@@ -24,14 +24,14 @@ sources:
 
 ## Quick pick
 
-| Backend | Factory | Import | Best for |
-| --- | --- | --- | --- |
-| In-memory | `memoryPersistence()` | `@tanstack/ai-persistence` | Dev, tests |
-| Drizzle SQLite (Node) | `sqlitePersistence({ url })` | `@tanstack/ai-persistence-drizzle/sqlite` | Local/prod file SQLite |
-| Drizzle (edge-safe) | `drizzlePersistence(db, { provider, schema })` | `@tanstack/ai-persistence-drizzle` | D1, libsql, any BYO Drizzle |
-| Drizzle Postgres | `drizzlePersistence(db, { provider: 'pg', schema })` | same | Neon, node-postgres, PGlite, … |
-| Prisma | `prismaPersistence(prisma)` | `@tanstack/ai-persistence-prisma` | Existing Prisma apps |
-| Cloudflare D1 | `cloudflarePersistence({ d1 })` | `@tanstack/ai-persistence-cloudflare` | Workers + stock schema |
+| Backend               | Factory                                              | Import                                    | Best for                       |
+| --------------------- | ---------------------------------------------------- | ----------------------------------------- | ------------------------------ |
+| In-memory             | `memoryPersistence()`                                | `@tanstack/ai-persistence`                | Dev, tests                     |
+| Drizzle SQLite (Node) | `sqlitePersistence({ url })`                         | `@tanstack/ai-persistence-drizzle/sqlite` | Local/prod file SQLite         |
+| Drizzle (edge-safe)   | `drizzlePersistence(db, { provider, schema })`       | `@tanstack/ai-persistence-drizzle`        | D1, libsql, any BYO Drizzle    |
+| Drizzle Postgres      | `drizzlePersistence(db, { provider: 'pg', schema })` | same                                      | Neon, node-postgres, PGlite, … |
+| Prisma                | `prismaPersistence(prisma)`                          | `@tanstack/ai-persistence-prisma`         | Existing Prisma apps           |
+| Cloudflare D1         | `cloudflarePersistence({ d1 })`                      | `@tanstack/ai-persistence-cloudflare`     | Workers + stock schema         |
 
 Every packaged backend provides **all four** state stores: messages, runs,
 interrupts, metadata. Locks are separate (see **persistence/locks**).

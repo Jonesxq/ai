@@ -48,11 +48,11 @@ export const persistence = defineAIPersistence({
 })
 ```
 
-| Shape | Contents |
-| --- | --- |
-| `ChatTranscriptStores` | `messages` (+ optional runs/interrupts/metadata) |
-| `ChatWithInterruptsStores` | `messages` + `runs` + `interrupts` |
-| `ChatPersistenceStores` | all four (packaged backend shape) |
+| Shape                      | Contents                                         |
+| -------------------------- | ------------------------------------------------ |
+| `ChatTranscriptStores`     | `messages` (+ optional runs/interrupts/metadata) |
+| `ChatWithInterruptsStores` | `messages` + `runs` + `interrupts`               |
+| `ChatPersistenceStores`    | all four (packaged backend shape)                |
 
 `defineAIPersistence` preserves exact keys and rejects unknown keys at runtime.
 
@@ -82,7 +82,9 @@ interface RunStore {
   }): Promise<RunRecord>
   update(
     runId: string,
-    patch: Partial<Pick<RunRecord, 'status' | 'finishedAt' | 'error' | 'usage'>>,
+    patch: Partial<
+      Pick<RunRecord, 'status' | 'finishedAt' | 'error' | 'usage'>
+    >,
   ): Promise<void>
   get(runId: string): Promise<RunRecord | null>
   findActiveRun?(threadId: string): Promise<RunRecord | null> // optional
@@ -99,9 +101,7 @@ interface RunStore {
 
 ```ts
 interface InterruptStore {
-  create(
-    record: Omit<InterruptRecord, 'status' | 'resolvedAt'>,
-  ): Promise<void>
+  create(record: Omit<InterruptRecord, 'status' | 'resolvedAt'>): Promise<void>
   resolve(interruptId: string, response?: unknown): Promise<void>
   cancel(interruptId: string): Promise<void>
   get(interruptId: string): Promise<InterruptRecord | null>

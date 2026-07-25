@@ -25,30 +25,30 @@ sources:
 TanStack AI splits **delivery durability** from **state persistence**. They
 share no code and solve different problems.
 
-| Layer | Answers | Package / API |
-| --- | --- | --- |
-| **Delivery durability** | Reconnect to a stream still running | `memoryStream` / `@tanstack/ai-durable-stream` on the response; see resumable streams docs |
-| **State persistence** | What is the conversation, later? | Client `persistence` on `useChat` + server `withPersistence` from `@tanstack/ai-persistence` |
+| Layer                   | Answers                             | Package / API                                                                                |
+| ----------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------- |
+| **Delivery durability** | Reconnect to a stream still running | `memoryStream` / `@tanstack/ai-durable-stream` on the response; see resumable streams docs   |
+| **State persistence**   | What is the conversation, later?    | Client `persistence` on `useChat` + server `withPersistence` from `@tanstack/ai-persistence` |
 
 A replayable stream is **not** a saved conversation. A saved conversation is
 **not** a live stream. Production apps often use both.
 
 ## Sub-skills
 
-| Need to... | Read |
-| --- | --- |
-| Wire server-side chat history, runs, interrupts | ai-core/persistence/server/SKILL.md |
-| Survive reloads in the browser | ai-core/persistence/client/SKILL.md |
-| Pick Drizzle / Prisma / Cloudflare / memory | ai-core/persistence/backends/SKILL.md |
-| Implement or override store interfaces | ai-core/persistence/custom-stores/SKILL.md |
-| Multi-instance locks (separate from state) | ai-core/persistence/locks/SKILL.md |
+| Need to...                                      | Read                                       |
+| ----------------------------------------------- | ------------------------------------------ |
+| Wire server-side chat history, runs, interrupts | ai-core/persistence/server/SKILL.md        |
+| Survive reloads in the browser                  | ai-core/persistence/client/SKILL.md        |
+| Pick Drizzle / Prisma / Cloudflare / memory     | ai-core/persistence/backends/SKILL.md      |
+| Implement or override store interfaces          | ai-core/persistence/custom-stores/SKILL.md |
+| Multi-instance locks (separate from state)      | ai-core/persistence/locks/SKILL.md         |
 
 ## State persistence has two halves
 
-| Half | Stores | Survives | Typical use |
-| --- | --- | --- | --- |
-| **Client** | transcript ± resume pointer in browser storage | reload / tab close (per browser) | SPA restore, offline-first |
-| **Server** | messages, runs, interrupts, metadata in SQL/D1/… | restart + multi-device | authoritative history, durable approvals |
+| Half       | Stores                                           | Survives                         | Typical use                              |
+| ---------- | ------------------------------------------------ | -------------------------------- | ---------------------------------------- |
+| **Client** | transcript ± resume pointer in browser storage   | reload / tab close (per browser) | SPA restore, offline-first               |
+| **Server** | messages, runs, interrupts, metadata in SQL/D1/… | restart + multi-device           | authoritative history, durable approvals |
 
 They are independent. Use either alone or both.
 
@@ -66,10 +66,10 @@ Server stores key on **`threadId`** (same as `chat({ threadId })` /
 
 When both halves run, ownership per turn is decided by request `messages`:
 
-| Client sends | Meaning | On finish |
-| --- | --- | --- |
+| Client sends             | Meaning                           | On finish                           |
+| ------------------------ | --------------------------------- | ----------------------------------- |
 | **Non-empty** `messages` | Full transcript (source of truth) | Server **overwrites** stored thread |
-| **Empty** `messages` | Continue from server copy | Server **loads** stored thread |
+| **Empty** `messages`     | Continue from server copy         | Server **loads** stored thread      |
 
 Never post a delta as `messages` — that wipes history down to the delta.
 
