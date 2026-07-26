@@ -15,11 +15,11 @@ Do not create a package, a second client, or a migration runner.
 **Route first.** If the app already runs one of these, stop and use that skill —
 it has the driver-specific code:
 
-| App runs                      | Use                                                |
-| ----------------------------- | -------------------------------------------------- |
-| Drizzle ORM (any dialect)     | tanstack-ai-persistence-build-drizzle-adapter      |
-| Prisma                        | tanstack-ai-persistence-build-prisma-adapter       |
-| Cloudflare Workers + D1       | tanstack-ai-persistence-build-cloudflare-adapter   |
+| App runs                  | Use                                              |
+| ------------------------- | ------------------------------------------------ |
+| Drizzle ORM (any dialect) | tanstack-ai-persistence-build-drizzle-adapter    |
+| Prisma                    | tanstack-ai-persistence-build-prisma-adapter     |
+| Cloudflare Workers + D1   | tanstack-ai-persistence-build-cloudflare-adapter |
 
 Everything else lands here. The full contracts and their invariants are in
 **tanstack-ai-persistence-stores**; the complete worked `node:sqlite` walkthrough
@@ -28,26 +28,26 @@ is `docs/persistence/build-your-own-adapter.md` and
 
 ## 1. Read the app before writing anything
 
-| Find              | Where to look                                                | What it decides                                       |
-| ----------------- | ------------------------------------------------------------ | ------------------------------------------------------ |
-| The client        | `src/db.ts`, `src/lib/db.ts`, `src/server/db.ts`              | What the file imports — never construct a second pool  |
-| Client lifetime   | module singleton vs per-request factory (`getDb()`, bindings) | `export const chatPersistence` vs `export function`    |
-| Migration flow    | `migrations/`, `drizzle/`, `supabase/migrations/`, an ORM CLI | How the DDL gets applied — use theirs, add nothing new |
-| Naming conventions| existing tables/collections                                   | Prefix (`chat_*`) so nothing collides                  |
-| JSON support      | `jsonb` (Postgres), `json` (MySQL 5.7+), text (SQLite)        | Whether mappers stringify/parse                        |
-| Import alias      | `tsconfig.json` `paths`                                       | `@/db`, `~/db`, `#/db`, or a relative path             |
+| Find               | Where to look                                                 | What it decides                                        |
+| ------------------ | ------------------------------------------------------------- | ------------------------------------------------------ |
+| The client         | `src/db.ts`, `src/lib/db.ts`, `src/server/db.ts`              | What the file imports — never construct a second pool  |
+| Client lifetime    | module singleton vs per-request factory (`getDb()`, bindings) | `export const chatPersistence` vs `export function`    |
+| Migration flow     | `migrations/`, `drizzle/`, `supabase/migrations/`, an ORM CLI | How the DDL gets applied — use theirs, add nothing new |
+| Naming conventions | existing tables/collections                                   | Prefix (`chat_*`) so nothing collides                  |
+| JSON support       | `jsonb` (Postgres), `json` (MySQL 5.7+), text (SQLite)        | Whether mappers stringify/parse                        |
+| Import alias       | `tsconfig.json` `paths`                                       | `@/db`, `~/db`, `#/db`, or a relative path             |
 
 ## 2. Shape the storage
 
 Four logical records. Whatever the engine, keep these keys — the store methods
 look records up by exactly these:
 
-| Record       | Key                   | Fields                                                                                     |
-| ------------ | --------------------- | -------------------------------------------------------------------------------------------- |
-| thread       | `threadId`            | `messages` (array, full transcript)                                                            |
-| run          | `runId`               | `threadId`, `status`, `startedAt`, `finishedAt?`, `error?`, `usage?`                           |
-| interrupt    | `interruptId`         | `runId`, `threadId`, `status`, `requestedAt`, `resolvedAt?`, `payload`, `response?`            |
-| metadata     | `(namespace, key)`    | `value`                                                                                        |
+| Record    | Key                | Fields                                                                              |
+| --------- | ------------------ | ----------------------------------------------------------------------------------- |
+| thread    | `threadId`         | `messages` (array, full transcript)                                                 |
+| run       | `runId`            | `threadId`, `status`, `startedAt`, `finishedAt?`, `error?`, `usage?`                |
+| interrupt | `interruptId`      | `runId`, `threadId`, `status`, `requestedAt`, `resolvedAt?`, `payload`, `response?` |
+| metadata  | `(namespace, key)` | `value`                                                                             |
 
 - Timestamps are **epoch milliseconds** (`number`) in records. Store them
   however the engine prefers and convert in the mapper.
@@ -69,7 +69,7 @@ history. They are engine-independent:
    complete authoritative transcript.
 2. **`loadThread` returns `[]`** for an unknown thread, never `null`.
 3. **`createOrResume` is insert-if-absent** — an existing `runId` comes back
-   *unchanged*, ignoring the new field values. Resume and double-submit depend
+   _unchanged_, ignoring the new field values. Resume and double-submit depend
    on it. After a racy insert, re-read rather than trusting your own write.
 4. **`runs.update` on an unknown id is a silent no-op** — it must not throw and
    must not insert. (Drivers that throw on zero rows affected need the
@@ -195,7 +195,7 @@ statements at factory scope, `INSERT ... ON CONFLICT`, JSON as `text`, epoch ms
 as `integer`. Wrap sync calls in `async` methods; the contracts are promise-based.
 
 **MongoDB** — one collection per record type, `_id` set to the natural key
-(`threadId`, `runId`, `interruptId`, and `` `${namespace} ${key}` `` or a
+(`threadId`, `runId`, `interruptId`, and `` `${namespace}�${key}` `` or a
 compound unique index on `{ namespace, key }` — never a `:`-joined string).
 `createOrResume` is `updateOne({ _id }, { $setOnInsert: doc }, { upsert: true })`
 then a `findOne` — `$setOnInsert` is the insert-if-absent primitive. Guard the

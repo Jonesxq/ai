@@ -21,13 +21,13 @@ the Cloudflare-specific parts.
 
 ## 1. Read the app before writing anything
 
-| Find                  | Where to look                                          | What it decides                                     |
-| --------------------- | ------------------------------------------------------ | ---------------------------------------------------- |
-| D1 binding name       | `wrangler.jsonc` `d1_databases[].binding`               | `env.DB` vs `env.AI_STATE` in the factory            |
-| How `env` reaches code| the Worker `fetch(request, env)`, or an async-local helper (`getDb()`, `getCloudflareContext()`) | Whether the factory takes `env` or reads a helper |
-| Drizzle or raw D1     | `drizzle-orm` in `package.json`, a `src/db/schema.ts`   | Which recipe below to follow                         |
-| Migrations dir        | `wrangler.jsonc` `migrations_dir`, default `migrations/`| Where the new `.sql` file goes                       |
-| Existing table names  | the current migrations / schema                         | Prefix (`chat_*`) so nothing collides                |
+| Find                   | Where to look                                                                                    | What it decides                                   |
+| ---------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
+| D1 binding name        | `wrangler.jsonc` `d1_databases[].binding`                                                        | `env.DB` vs `env.AI_STATE` in the factory         |
+| How `env` reaches code | the Worker `fetch(request, env)`, or an async-local helper (`getDb()`, `getCloudflareContext()`) | Whether the factory takes `env` or reads a helper |
+| Drizzle or raw D1      | `drizzle-orm` in `package.json`, a `src/db/schema.ts`                                            | Which recipe below to follow                      |
+| Migrations dir         | `wrangler.jsonc` `migrations_dir`, default `migrations/`                                         | Where the new `.sql` file goes                    |
+| Existing table names   | the current migrations / schema                                                                  | Prefix (`chat_*`) so nothing collides             |
 
 ## 2. Two independent pieces
 
@@ -88,14 +88,14 @@ Two routes, same invariants:
 
 The invariants are the whole game, whichever route you take:
 
-| Store        | Rule                                                                            |
-| ------------ | -------------------------------------------------------------------------------- |
-| `messages`   | `saveThread` is a full replace (`INSERT … ON CONFLICT(thread_id) DO UPDATE`)      |
+| Store        | Rule                                                                                |
+| ------------ | ----------------------------------------------------------------------------------- |
+| `messages`   | `saveThread` is a full replace (`INSERT … ON CONFLICT(thread_id) DO UPDATE`)        |
 | `runs`       | `createOrResume` reads first, else `INSERT … ON CONFLICT DO NOTHING`, then re-reads |
-| `runs`       | `update` on an unknown id is a silent no-op — never throws, never inserts         |
-| `interrupts` | `create` is insert-if-absent; never clobber a resolved interrupt back to pending  |
-| `interrupts` | every `list*` ends `ORDER BY requested_at ASC`                                    |
-| `metadata`   | reject nullish `set` with a clear `TypeError`; tell callers to use `delete`       |
+| `runs`       | `update` on an unknown id is a silent no-op — never throws, never inserts           |
+| `interrupts` | `create` is insert-if-absent; never clobber a resolved interrupt back to pending    |
+| `interrupts` | every `list*` ends `ORDER BY requested_at ASC`                                      |
+| `metadata`   | reject nullish `set` with a clear `TypeError`; tell callers to use `delete`         |
 
 Row mappers omit absent optionals (`...(row.error != null ? { error: row.error } : {})`)
 so records compare cleanly against the reference in-memory backend. JSON columns
