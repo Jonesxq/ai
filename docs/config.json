@@ -248,7 +248,7 @@
           "label": "Chat Persistence",
           "to": "persistence/chat-persistence",
           "addedAt": "2026-07-22",
-          "updatedAt": "2026-07-25"
+          "updatedAt": "2026-07-26"
         },
         {
           "label": "Client Persistence",

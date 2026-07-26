@@ -59,9 +59,17 @@ the result to `withPersistence`. The core never inspects your tables.
 | Survive reloads in the browser                  | tanstack-ai-persistence-client/SKILL.md                   |
 | Implement the store interfaces for your DB      | tanstack-ai-persistence-stores/SKILL.md                   |
 | Multi-instance locks (separate from state)      | tanstack-ai-persistence-locks/SKILL.md                    |
-| Build a Drizzle-backed adapter                  | tanstack-ai-persistence-build-drizzle-adapter/SKILL.md    |
-| Build a Prisma-backed adapter                   | tanstack-ai-persistence-build-prisma-adapter/SKILL.md     |
-| Build a Cloudflare D1 + Durable Object adapter  | tanstack-ai-persistence-build-cloudflare-adapter/SKILL.md |
+
+Adding persistence to an app? Pick the recipe that matches what it already
+runs — each one writes a single `chat-persistence.ts` against the app's
+existing database client and schema:
+
+| The app runs...                                 | Read                                                      |
+| ----------------------------------------------- | --------------------------------------------------------- |
+| Drizzle ORM (SQLite / Postgres / MySQL)         | tanstack-ai-persistence-build-drizzle-adapter/SKILL.md    |
+| Prisma                                          | tanstack-ai-persistence-build-prisma-adapter/SKILL.md     |
+| Cloudflare Workers + D1 (± Durable Object locks)| tanstack-ai-persistence-build-cloudflare-adapter/SKILL.md |
+| Anything else — raw `pg`, Kysely, SQLite, Mongo | tanstack-ai-persistence-build-custom-adapter/SKILL.md     |
 
 ## State persistence has two halves
 

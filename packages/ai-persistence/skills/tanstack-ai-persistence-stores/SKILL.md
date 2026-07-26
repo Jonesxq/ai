@@ -26,8 +26,9 @@ need against whatever you already run and hand the result to
 `withPersistence`. The core never inspects your tables, so the schema is yours.
 
 Use `memoryPersistence()` for dev and tests. Everything durable is an adapter
-you write — the worked recipes are in the
-`tanstack-ai-persistence-build-{drizzle,prisma,cloudflare}-adapter` skills, and
+you write. This skill is the contract reference; the per-stack recipes that
+write a `chat-persistence.ts` into an app are
+`tanstack-ai-persistence-build-{drizzle,prisma,cloudflare,custom}-adapter`, and
 a complete `node:sqlite` implementation lives in
 `examples/ts-react-chat/src/lib/sqlite-persistence.ts`.
 
@@ -267,5 +268,5 @@ Silent semantic drift shows up as stuck approvals or wiped history in prod.
 ## Cross-references
 
 - **tanstack-ai-persistence-server** — when middleware calls each store
-- **tanstack-ai-persistence-build-drizzle-adapter** / **-prisma-** / **-cloudflare-** — worked recipes
+- **tanstack-ai-persistence-build-drizzle-adapter** / **-prisma-** / **-cloudflare-** / **-custom-** — per-stack recipes
 - **tanstack-ai-persistence-locks** — not a state store

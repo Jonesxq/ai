@@ -11,6 +11,17 @@ process restarts. `withPersistence` is a chat middleware that writes that
 state to a store you choose, so the server owns an authoritative copy of every
 thread.
 
+```bash
+pnpm add @tanstack/ai-persistence
+npx @tanstack/intent@latest install
+```
+
+The second command wires this package's [Agent Skills](../getting-started/agent-skills)
+into your coding assistant. Run it before you start — the recipes read your
+existing database setup and write the adapter to match, and they encode the
+invariants (full-overwrite `saveThread`, insert-if-absent run and interrupt
+creates) that are easy to get wrong and expensive to debug.
+
 ## Persist state on the server
 
 Add the middleware to `chat()` and point it at a backend. Here `persistence` is a
@@ -116,5 +127,9 @@ successful interrupt or finish boundary.
 - Bring durability to the browser too, so a full page reload restores the
   conversation and rejoins an in-flight run: [Client persistence](./client-persistence).
 - Build the backend on the core, and look up the store contracts:
-  [Build your own adapter](./build-your-own-adapter).
+  [Build your own adapter](./build-your-own-adapter). Whatever you already run —
+  Drizzle, Prisma, Cloudflare D1, raw SQL — install the shipped
+  [Agent Skills](../getting-started/agent-skills) with
+  `npx @tanstack/intent@latest install` and have your assistant write the
+  `chat-persistence.ts` against your existing schema.
 - Choose which stores to run: [Controls](./controls).

@@ -22,6 +22,20 @@ Three things can go wrong with an AI chat, and they have different fixes:
 
 TanStack AI solves these with two independent layers. You can use either alone or both together.
 
+## Install this first
+
+Server-side state persistence lives in one package:
+
+```bash
+pnpm add @tanstack/ai-persistence
+```
+
+Then, before you write any of it, install the Agent Skills:
+
+```bash
+npx @tanstack/intent@latest install
+```
+
 ## The two layers
 
 | Layer | Answers | Lives | Docs |
@@ -275,16 +289,10 @@ reference backend, and a conformance testkit — not a backend for your database
 You implement the stores against whatever you already run;
 [Build your own adapter](./build-your-own-adapter) walks through a complete one.
 
-## Teach your coding agent
-
-The package ships [Agent Skills](../getting-started/agent-skills) covering the
-server middleware, browser persistence, the store contracts, locks, and worked
-Drizzle / Prisma / Cloudflare adapter recipes. Wire them into Claude Code,
-Cursor, Copilot, or Codex with TanStack Intent:
-
-```bash
-npx @tanstack/intent@latest install
-```
+If you ran `intent install` [above](#install-this-first), you can skip the
+typing: ask your assistant for "add chat persistence to this app" and the recipe
+matching your database loads itself. The full skill list is in
+[Build your own adapter](./build-your-own-adapter#let-your-coding-agent-write-it).
 
 ## Where to go next
 

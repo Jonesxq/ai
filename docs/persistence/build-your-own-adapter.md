@@ -424,16 +424,17 @@ accident. When this is green, your adapter is a drop-in for `withPersistence`.
 The `examples/ts-react-chat` app runs exactly this test against its SQLite
 backend.
 
-## Recipes for common stacks
+## Let your coding agent write it
 
-Drizzle, Prisma, and Cloudflare D1 (plus Durable Objects for locks) are each a
-worked example of the patterns on this page, and `@tanstack/ai-persistence`
-ships each one as an [Agent Skill](../getting-started/agent-skills) your coding
-assistant can load: the Drizzle schema and `onConflict` idempotency, the Prisma
-models fragment and BigInt timestamp handling, and the Cloudflare D1 stores plus
-a lease-backed Durable Object lock store.
+You do not have to type this page out. `@tanstack/ai-persistence` ships
+[Agent Skills](../getting-started/agent-skills) that turn it into a recipe your
+assistant follows against **your** stack: it reads your existing ORM config,
+schema file, and database handle, appends the four tables to the schema you
+already have, and writes a single `src/lib/chat-persistence.ts` exporting the
+`ChatPersistence` — no new package, no second database client, and no migration
+mechanism competing with the one you run.
 
-Install them with [TanStack Intent](https://tanstack.com/intent/latest/docs/overview),
+Install the skills with [TanStack Intent](https://tanstack.com/intent/latest/docs/overview),
 which scans `node_modules` for packages that ship skills and writes the mappings
 into your agent's config (`AGENTS.md`, `CLAUDE.md`, `.cursorrules`, …):
 
@@ -442,23 +443,24 @@ pnpm add @tanstack/ai-persistence
 npx @tanstack/intent@latest install
 ```
 
-Then ask your assistant to build the adapter — it will pull the matching skill
-into context. The skills are plain files if you prefer to read or reference them
-directly:
+Then ask for what you want — "add chat persistence to this app" — and the
+matching skill loads itself into context:
 
-| Skill                                                | Covers                                                     |
-| ---------------------------------------------------- | ---------------------------------------------------------- |
-| `tanstack-ai-persistence`                            | Entry point — routes to everything below                   |
-| `tanstack-ai-persistence-server`                     | `withPersistence`, run lifecycle, interrupts, `reconstructChat` |
-| `tanstack-ai-persistence-client`                     | Browser persistence on `useChat`                           |
-| `tanstack-ai-persistence-stores`                     | The store contracts and their invariants                   |
-| `tanstack-ai-persistence-locks`                      | `LockStore` / `withLocks` coordination                     |
-| `tanstack-ai-persistence-build-drizzle-adapter`      | Drizzle SQLite + Postgres recipe                           |
-| `tanstack-ai-persistence-build-prisma-adapter`       | Prisma models fragment + delegate mapping                  |
-| `tanstack-ai-persistence-build-cloudflare-adapter`   | D1 stores + Durable Object lock store                      |
+| Skill                                              | Covers                                                          |
+| -------------------------------------------------- | ---------------------------------------------------------------- |
+| `tanstack-ai-persistence`                          | Entry point — routes to everything below                        |
+| `tanstack-ai-persistence-server`                   | `withPersistence`, run lifecycle, interrupts, `reconstructChat` |
+| `tanstack-ai-persistence-client`                   | Browser persistence on `useChat`                                |
+| `tanstack-ai-persistence-stores`                   | The store contracts and their invariants                        |
+| `tanstack-ai-persistence-locks`                    | `LockStore` / `withLocks` coordination                          |
+| `tanstack-ai-persistence-build-drizzle-adapter`    | `chat-persistence.ts` for a Drizzle app (SQLite / Postgres / MySQL) |
+| `tanstack-ai-persistence-build-prisma-adapter`     | `chat-persistence.ts` for a Prisma app                          |
+| `tanstack-ai-persistence-build-cloudflare-adapter` | `chat-persistence.ts` for a Worker on D1, plus Durable Object locks |
+| `tanstack-ai-persistence-build-custom-adapter`     | `chat-persistence.ts` for anything else — raw `pg`, Kysely, SQLite, Mongo, Supabase |
 
-They live at
-`node_modules/@tanstack/ai-persistence/skills/<skill-name>/SKILL.md`.
+They are plain Markdown at
+`node_modules/@tanstack/ai-persistence/skills/<skill-name>/SKILL.md` if you
+prefer to read or follow them yourself.
 
 ## Store interface reference
 
