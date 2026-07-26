@@ -13,6 +13,13 @@ through the app's existing `drizzle-kit` setup.
 Do not create a package, a second `db` instance, a migration runner, or a
 `drizzle.config.ts`. The app has those.
 
+> **Or install it.** `@tanstack/ai-persistence-drizzle` is this recipe as a
+> package: `drizzlePersistence(db, { provider, schema })` for SQLite and
+> Postgres, a `/sqlite` Node factory, and schema subpaths for your drizzle-kit
+> journal. Install it when the stock schema suits you and you would rather not
+> own the file; follow this skill when the schema, tenancy, or database is
+> yours.
+
 Read the **Build Your Own Adapter** guide
 (`docs/persistence/build-your-own-adapter.md`) for the store contracts and
 invariants, and **tanstack-ai-persistence-stores** for the shape rules. Every

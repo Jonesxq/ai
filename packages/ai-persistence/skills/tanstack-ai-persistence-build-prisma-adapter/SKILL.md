@@ -10,6 +10,11 @@ exporting a `ChatPersistence` built from the app's existing `PrismaClient`. Plus
 four models added to the app's existing `schema.prisma` and a migration created
 with the app's own `prisma migrate`.
 
+> **Or install it.** `@tanstack/ai-persistence-prisma` is this recipe as a
+> package: `prismaPersistence(prisma)` plus a models CLI, working against both
+> Prisma 6 and 7. Install it when the stock models suit you; follow this skill
+> when you want the fragment and mappers in your own repo.
+
 Do not create a package, a second client, a datasource block, a generator, or a
 hand-written SQL migration. The app has those.
 

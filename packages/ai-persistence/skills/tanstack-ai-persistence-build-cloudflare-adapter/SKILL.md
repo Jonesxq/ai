@@ -11,6 +11,11 @@ binding, plus (when the app needs coordination) a Durable Object lock store.
 Tables go into the app's existing `migrations/` directory and are applied with
 `wrangler d1 migrations apply`.
 
+> **Or install it.** `@tanstack/ai-persistence-cloudflare` is this recipe as a
+> package: `cloudflarePersistence({ d1 })` plus a lease-backed Durable Object
+> lock store. Install it when the stock schema suits you; follow this skill when
+> you want the stores in your own Worker.
+
 Do not create a package or a migration runner. Wrangler already tracks applied
 migrations; a second bookkeeping table only creates drift.
 
