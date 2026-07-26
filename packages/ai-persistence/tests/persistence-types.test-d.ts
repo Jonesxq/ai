@@ -14,6 +14,8 @@ import { InMemoryLockStore, withLocks } from '@tanstack/ai/locks'
 import type { LockStore } from '@tanstack/ai/locks'
 import type {
   AIPersistence,
+  ArtifactStore,
+  BlobStore,
   ChatPersistence,
   ChatTranscriptPersistence,
   ChatTranscriptStores,
@@ -123,8 +125,18 @@ const uncertainInherited = composePersistence(base, {
 })
 expectTypeOf(uncertainInherited.stores.messages).toEqualTypeOf<MessageStore>()
 
-// Named shapes
-expectTypeOf(memoryPersistence()).toEqualTypeOf<ChatPersistence>()
+// Named shapes. memoryPersistence() is the chat shape widened with the
+// generation media stores, so it still satisfies every chat entrypoint while
+// also opting into the byte path of withGenerationPersistence.
+const memory = memoryPersistence()
+expectTypeOf(memory.stores.messages).toEqualTypeOf<MessageStore>()
+expectTypeOf(memory.stores.runs).toEqualTypeOf<RunStore>()
+expectTypeOf(memory.stores.interrupts).toEqualTypeOf<InterruptStore>()
+expectTypeOf(memory.stores.metadata).toEqualTypeOf<MetadataStore>()
+expectTypeOf(memory.stores.artifacts).toEqualTypeOf<ArtifactStore>()
+expectTypeOf(memory.stores.blobs).toEqualTypeOf<BlobStore>()
+withPersistence(memory)
+withGenerationPersistence(memory)
 const transcript: ChatTranscriptPersistence = messagesOnly
 void transcript
 declare const fullChat: ChatPersistence

@@ -449,8 +449,11 @@ describe('withGenerationPersistence generation artifacts', () => {
 
   it('fails early when artifact persistence is enabled without a paired blob store', () => {
     const full = memoryPersistence()
+    // `runs` is present so the required-runs rule passes and the artifacts /
+    // blobs pairing rule is the one under test.
     const persistence: AIPersistence = defineAIPersistence({
       stores: {
+        runs: full.stores.runs,
         artifacts: full.stores.artifacts,
       },
     })
