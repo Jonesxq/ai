@@ -3,8 +3,10 @@ import { EventType, chat, defineChatMiddleware } from '@tanstack/ai'
 import type {
   AnyTextAdapter,
   ChatMiddlewareContext,
+  SandboxStore,
   StreamChunk,
 } from '@tanstack/ai'
+import { InMemorySandboxStore } from '@tanstack/ai'
 import type { LockStore } from '../src/locks'
 import { InMemoryLockStore } from '../src/locks'
 import { memoryPersistence } from '../src/memory'
@@ -13,9 +15,11 @@ import {
   InterruptsCapability,
   LocksCapability,
   PersistenceCapability,
+  SandboxStoreCapability,
   getInterrupts,
   getLocks,
   getPersistence,
+  getSandboxStore,
 } from '../src/capabilities'
 import { createInterruptController } from '../src/interrupts'
 import type { AIPersistence, InterruptStore } from '../src'
@@ -123,6 +127,48 @@ describe('persistence capabilities', () => {
     )
 
     expect(seen.locks).toBe(locks)
+  })
+  it('provides the sandbox store when present on the persistence bag', async () => {
+    const persistence = memoryPersistence()
+    const sandbox = new InMemorySandboxStore()
+    const withSandboxStore = {
+      stores: { ...persistence.stores, sandbox },
+    }
+    const seen: { sandbox?: SandboxStore } = {}
+
+    const consumer = defineChatMiddleware({
+      name: 'sandbox-consumer',
+      requires: [SandboxStoreCapability],
+      setup(ctx: ChatMiddlewareContext) {
+        seen.sandbox = getSandboxStore(ctx)
+      },
+    })
+
+    await collect(
+      chat({
+        adapter: mockAdapter([
+          {
+            type: EventType.RUN_STARTED,
+            runId: 'r1',
+            threadId: 't1',
+            timestamp: 1,
+          },
+          {
+            type: EventType.RUN_FINISHED,
+            runId: 'r1',
+            threadId: 't1',
+            finishReason: 'stop',
+            timestamp: 1,
+          },
+        ]),
+        messages: [{ role: 'user', content: 'hi' }],
+        runId: 'r1',
+        threadId: 't1',
+        middleware: [withPersistence(withSandboxStore), consumer],
+      }) as AsyncIterable<StreamChunk>,
+    )
+
+    expect(seen.sandbox).toBe(sandbox)
   })
 })
 

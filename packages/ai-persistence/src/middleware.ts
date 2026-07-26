@@ -3,9 +3,11 @@ import {
   InterruptsCapability,
   LocksCapability,
   PersistenceCapability,
+  SandboxStoreCapability,
   provideInterrupts,
   provideLocks,
   providePersistence,
+  provideSandboxStore,
 } from './capabilities'
 import {
   validateChatPersistenceStores,
@@ -268,13 +270,16 @@ function interruptPayload(interrupt: unknown): Record<string, unknown> {
 
 interface PersistencePlan {
   wantsInterrupts: boolean
+  wantsSandbox: boolean
   runs: AIPersistence['stores']['runs']
 }
 
 function resolvePersistencePlan(persistence: AIPersistence): PersistencePlan {
+  const stores = persistence.stores as AIPersistenceStores
   return {
-    wantsInterrupts: persistence.stores.interrupts !== undefined,
-    runs: persistence.stores.runs,
+    wantsInterrupts: stores.interrupts !== undefined,
+    wantsSandbox: stores.sandbox !== undefined,
+    runs: stores.runs,
   }
 }
 
@@ -424,7 +429,7 @@ export function withPersistence<TStores extends ChatTranscriptStores>(
   const snapshotStreaming = options.snapshotStreaming ?? false
   const snapshotIntervalMs = options.snapshotIntervalMs ?? 1000
   const plan = resolvePersistencePlan(persistence)
-  const { wantsInterrupts, runs } = plan
+  const { wantsInterrupts, wantsSandbox, runs } = plan
   const messageStore = persistence.stores.messages
   if (!messageStore) {
     // validateChatPersistenceStores already throws; this narrows for TypeScript.
@@ -434,6 +439,7 @@ export function withPersistence<TStores extends ChatTranscriptStores>(
   const provides = [
     PersistenceCapability,
     ...(wantsInterrupts ? [InterruptsCapability] : []),
+    ...(wantsSandbox ? [SandboxStoreCapability] : []),
   ]
 
   return defineChatMiddleware({
@@ -449,6 +455,10 @@ export function withPersistence<TStores extends ChatTranscriptStores>(
 
       if (wantsInterrupts && persistence.stores.interrupts) {
         provideInterrupts(ctx, persistence.stores.interrupts)
+      }
+      if (wantsSandbox) {
+        const sandbox = (persistence.stores as AIPersistenceStores).sandbox
+        if (sandbox) provideSandboxStore(ctx, sandbox)
       }
     },
 
@@ -631,10 +641,15 @@ export function withPersistence<TStores extends ChatTranscriptStores>(
  * Prisma, D1, memory) do not ship locks, and multi-instance apps compose a
  * distributed lock separately (e.g. Cloudflare Durable Objects).
  *
+ * The `LocksCapability` token is the same one `@tanstack/ai-sandbox` consumes,
+ * so a lock provided here reaches `withSandbox` automatically when both are in
+ * the chain.
+ *
  * ```ts
  * middleware: [
  *   withPersistence(drizzlePersistence(db, opts)),
  *   withLocks(createDurableObjectLockStore(env.AI_LOCKS)),
+ *   withSandbox(sandbox),
  * ]
  * ```
  */

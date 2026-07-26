@@ -16,6 +16,8 @@ export type {
   ChatTranscriptPersistence,
   ChatPersistence,
   ChatWithInterruptsPersistence,
+  ChatAndSandboxPersistenceStores,
+  ChatAndSandboxPersistence,
   AIPersistence,
   AIPersistenceOverrides,
   ComposedAIPersistenceStores,
@@ -44,7 +46,9 @@ export { memoryPersistence } from './memory'
 export { createInterruptController } from './interrupts'
 export type { InterruptController } from './interrupts'
 
-// Capabilities
+// Capabilities. Locks + sandbox-store tokens are re-exported from core
+// `@tanstack/ai` (their neutral home) so a persistence-provided store reaches
+// the sandbox layer through the same token reference.
 export {
   PersistenceCapability,
   InterruptsCapability,
@@ -55,8 +59,15 @@ export {
   LocksCapability,
   getLocks,
   provideLocks,
+  SandboxStoreCapability,
+  getSandboxStore,
+  provideSandboxStore,
 } from './capabilities'
 
 // Lock primitive (separate from state stores; provide via withLocks)
 export { InMemoryLockStore } from './locks'
 export type { LockStore } from './locks'
+
+// Sandbox-store primitive (re-exported from core)
+export { InMemorySandboxStore } from '@tanstack/ai'
+export type { SandboxStore, SandboxRecord } from '@tanstack/ai'
