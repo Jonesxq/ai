@@ -2240,6 +2240,9 @@ importers:
       '@tanstack/ai-persistence-drizzle':
         specifier: workspace:*
         version: link:../ai-persistence-drizzle
+      '@tanstack/ai-sandbox':
+        specifier: workspace:*
+        version: link:../ai-sandbox
       '@vitest/coverage-v8':
         specifier: 4.0.14
         version: 4.0.14(supports-color@7.2.0)(vitest@4.1.10)
@@ -2261,6 +2264,9 @@ importers:
       '@tanstack/ai-persistence':
         specifier: workspace:*
         version: link:../ai-persistence
+      '@tanstack/ai-sandbox':
+        specifier: workspace:*
+        version: link:../ai-sandbox
       '@vitest/coverage-v8':
         specifier: 4.0.14
         version: 4.0.14(supports-color@7.2.0)(vitest@4.1.10)
@@ -2279,6 +2285,9 @@ importers:
       '@tanstack/ai-persistence':
         specifier: workspace:*
         version: link:../ai-persistence
+      '@tanstack/ai-sandbox':
+        specifier: workspace:*
+        version: link:../ai-sandbox
       '@vitest/coverage-v8':
         specifier: 4.0.14
         version: 4.0.14(supports-color@7.2.0)(vitest@4.1.10)

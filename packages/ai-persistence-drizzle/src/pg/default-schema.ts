@@ -79,6 +79,24 @@ export const metadata = pgTable(
 )
 
 /**
+ * Persisted sandbox resume records (`@tanstack/ai-sandbox`'s `SandboxStore`).
+ * Keyed by the compound sandbox key; small metadata only (no blobs).
+ *
+ * **Not** part of {@link TanstackAiPgSchema} / the chat BYO contract —
+ * chat-only apps never need this table. Pass it to
+ * {@link createDrizzleSandboxStore} when you want durable sandbox resume.
+ */
+export const sandboxes = pgTable('sandboxes', {
+  key: text('key').primaryKey(),
+  provider: text('provider').notNull(),
+  providerSandboxId: text('provider_sandbox_id').notNull(),
+  latestSnapshotId: text('latest_snapshot_id'),
+  threadId: text('thread_id').notNull(),
+  latestRunId: text('latest_run_id'),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
+})
+
+/**
  * Build a fresh copy of the default SQLite schema tables.
  *
  * Pass the result to {@link drizzlePersistence} with `provider: 'pg'`,

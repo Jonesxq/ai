@@ -17,9 +17,10 @@ import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { drizzle } from 'drizzle-orm/sqlite-proxy'
 import { drizzlePersistence } from '../core/persistence'
-import { createDefaultSqliteSchema } from './default-schema'
-import { ensureSqliteTables } from './ensure-tables'
-import type { ChatPersistence } from '@tanstack/ai-persistence'
+import { createDefaultSqliteSchema, sandboxes } from './default-schema'
+import { createDrizzleSandboxStore } from '../sandbox-store'
+import { ensureSqliteTables, ensureSqliteTable } from './ensure-tables'
+import type { ChatAndSandboxPersistence } from '@tanstack/ai-persistence'
 import type { TanstackAiSqliteSchema } from '../core/schema-contract'
 
 export { createDefaultSqliteSchema } from './default-schema'
@@ -66,7 +67,9 @@ export interface SqlitePersistenceOptions {
  */
 export function sqlitePersistence(
   options: SqlitePersistenceOptions,
-): ChatPersistence & {
+): ChatAndSandboxPersistence & {
+  /** Underlying Drizzle database (for optional extra stores). */
+  db: ReturnType<typeof drizzle>
   /** Close the underlying Node SQLite connection. */
   close: () => void
 } {
@@ -77,6 +80,9 @@ export function sqlitePersistence(
   try {
     if (options.ensureTables !== false) {
       ensureSqliteTables((sql) => sqlite.exec(sql), schema)
+      // Sandboxes stay outside the chat schema contract but the Node factory
+      // bootstraps the stock table so local/dev sandbox resume works zero-config.
+      ensureSqliteTable((sql) => sqlite.exec(sql), sandboxes)
     }
   } catch (error) {
     sqlite.close()
@@ -100,7 +106,11 @@ export function sqlitePersistence(
   const persistence = drizzlePersistence(db, { provider: 'sqlite', schema })
   let closed = false
   return {
-    ...persistence,
+    stores: {
+      ...persistence.stores,
+      sandbox: createDrizzleSandboxStore(db, sandboxes),
+    },
+    db,
     close() {
       if (closed) return
       sqlite.close()

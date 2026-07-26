@@ -1,11 +1,14 @@
 import { drizzle } from 'drizzle-orm/d1'
 import {
   createDefaultSqliteSchema,
+  createDrizzleSandboxStore,
+  defaultSqliteSandboxes,
   drizzlePersistence,
 } from '@tanstack/ai-persistence-drizzle'
+import type { SandboxStore } from '@tanstack/ai'
 
 /**
- * Create the structured stores over a Cloudflare D1 binding.
+ * Create the structured chat stores over a Cloudflare D1 binding.
  *
  * Thin wrapper: stock SQLite schema + `drizzle-orm/d1` +
  * {@link drizzlePersistence}. This package does **not** ship or apply DDL —
@@ -25,4 +28,18 @@ export function createD1Stores(d1: D1Database) {
     interrupts: persistence.stores.interrupts,
     metadata: persistence.stores.metadata,
   }
+}
+
+/**
+ * Durable {@link SandboxStore} over a migrated Cloudflare D1 binding (delegates
+ * to the Drizzle sandbox store). Pair with `createDurableObjectLockStore` for a
+ * multi-instance-correct sandbox resume on the edge. The `sandboxes` table is
+ * **not** part of the chat BYO schema — migrate it separately (or use the stock
+ * definition from `@tanstack/ai-persistence-drizzle`).
+ */
+export function createD1SandboxStore(d1: D1Database): SandboxStore {
+  return createDrizzleSandboxStore(
+    drizzle(d1, { schema: { sandboxes: defaultSqliteSandboxes } }),
+    defaultSqliteSandboxes,
+  )
 }

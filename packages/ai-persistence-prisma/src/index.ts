@@ -18,6 +18,8 @@ import type { PrismaModelMap } from './model-contract'
 export { prismaModels, prismaModelsFilename } from './models'
 export { PrismaModelError } from './model-contract'
 export type { PrismaModelMap } from './model-contract'
+export { createPrismaSandboxStore } from './sandbox-store'
+export type { PrismaSandboxStoreOptions } from './sandbox-store'
 
 /**
  * Structural stand-in for a generated Prisma client.
@@ -49,13 +51,12 @@ export interface PrismaPersistenceOptions {
 /**
  * Wire TanStack AI persistence stores over a migrated Prisma client.
  *
- * State stores only — locks are a separate concern. For multi-instance
- * coordination use `withLocks` with a distributed `LockStore` (for example
- * `createDurableObjectLockStore` from `@tanstack/ai-persistence-cloudflare`).
- * Do not invent an in-process lock and pretend it coordinates across instances.
- */
-/**
  * Returns {@link ChatPersistence} (messages + runs + interrupts + metadata).
+ * Sandbox resume is separate via {@link createPrismaSandboxStore} so chat-only
+ * clients need not include the `Sandbox` model.
+ *
+ * Locks are a separate concern. For multi-instance coordination use `withLocks`
+ * with a distributed `LockStore`.
  */
 export function prismaPersistence(
   prisma: PrismaClientLike,

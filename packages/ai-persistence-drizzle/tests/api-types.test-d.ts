@@ -2,6 +2,7 @@ import { expectTypeOf } from 'vitest'
 import type { DrizzleD1Database } from 'drizzle-orm/d1'
 import type { PgliteDatabase } from 'drizzle-orm/pglite'
 import type {
+  ChatAndSandboxPersistence,
   ChatPersistence,
   MessageStore,
   RunStore,
@@ -50,7 +51,7 @@ drizzlePersistence(pgDatabase, { provider: 'pg', schema: defaultSchema })
 drizzlePersistence(d1Database, { schema: defaultSchema })
 
 const sqlite = sqlitePersistence({ url: ':memory:' })
-expectTypeOf(sqlite.stores).toEqualTypeOf<ChatPersistence['stores']>()
+expectTypeOf(sqlite.stores).toEqualTypeOf<ChatAndSandboxPersistence['stores']>()
 expectTypeOf(sqlite.close).toEqualTypeOf<() => void>()
 
 // Default factories, emitted assets, and renamed/extended variant all satisfy

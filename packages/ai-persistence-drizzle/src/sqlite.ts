@@ -9,3 +9,5 @@ export {
   sqlitePersistence,
 } from './sqlite/factory'
 export type { SqlitePersistenceOptions } from './sqlite/factory'
+
+export { sandboxes } from './sqlite/default-schema'

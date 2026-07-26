@@ -69,3 +69,15 @@ export function ensureSqliteTables(
     for (const indexSql of createIndexSql(table)) exec(indexSql)
   }
 }
+
+/**
+ * Bootstrap a single extra table (e.g. the optional sandboxes table) the same
+ * way {@link ensureSqliteTables} does for the chat schema.
+ */
+export function ensureSqliteTable(
+  exec: (sql: string) => void,
+  table: SQLiteTable,
+): void {
+  exec(createTableSql(table))
+  for (const indexSql of createIndexSql(table)) exec(indexSql)
+}

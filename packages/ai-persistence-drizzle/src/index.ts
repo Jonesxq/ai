@@ -45,3 +45,14 @@ export type {
   TanstackAiSchema,
 } from './core/schema-contract'
 export type { DrizzleSqliteDb, DrizzleDb } from './core/stores'
+
+/** Durable sandbox resume store (optional; not part of the chat schema contract). */
+export { createDrizzleSandboxStore } from './sandbox-store'
+export type {
+  SandboxTable,
+  SandboxTableShapes,
+  SqliteSandboxTable,
+  PgSandboxTable,
+} from './sandbox-store'
+export { sandboxes as defaultSqliteSandboxes } from './sqlite/default-schema'
+export { sandboxes as defaultPgSandboxes } from './pg/default-schema'

@@ -1,7 +1,7 @@
 import { createD1Stores } from './d1'
 import type { ChatPersistence } from '@tanstack/ai-persistence'
 
-export { createD1Stores } from './d1'
+export { createD1Stores, createD1SandboxStore } from './d1'
 export {
   CloudflareLockDurableObject,
   createDurableObjectLockStore,
@@ -25,7 +25,8 @@ export type {
  *
  * Locks are a separate concern: use {@link createDurableObjectLockStore} with
  * `withLocks` from `@tanstack/ai-persistence` when you need multi-instance
- * coordination.
+ * coordination. Sandbox resume uses {@link createD1SandboxStore} + the same
+ * shared lock token.
  */
 export interface CloudflarePersistenceOptions {
   d1: D1Database
@@ -38,7 +39,8 @@ export interface CloudflarePersistenceOptions {
  * `@tanstack/ai-persistence-drizzle`. Prefer owning that schema in your app
  * and calling `drizzlePersistence` directly when you need renames or extra
  * columns. Durable Object locks are separate via
- * {@link createDurableObjectLockStore}.
+ * {@link createDurableObjectLockStore}. Sandbox resume is separate via
+ * {@link createD1SandboxStore}.
  */
 export function cloudflarePersistence(
   options: CloudflarePersistenceOptions,
