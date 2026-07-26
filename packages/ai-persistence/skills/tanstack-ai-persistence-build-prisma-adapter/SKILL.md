@@ -17,8 +17,10 @@ invariants. This is the Prisma-specific recipe.
 ## Package shape
 
 Peer dep: `@prisma/client >=6.7.0`. The adapter provides `messages`, `runs`,
-`interrupts`, `metadata` (no `locks`). It does not ship a datasource, generator,
-connection URL, or prebuilt SQL migration: those stay in the app's schema.
+`interrupts`, `metadata` — the only four keys `stores` accepts. It does not ship
+a datasource, generator, connection URL, or prebuilt SQL migration: those stay
+in the app's schema. Annotate the factory's return as `ChatPersistence`; bare
+`AIPersistence` is the all-optional bag and `withPersistence` rejects it.
 
 Support Prisma 6 and 7 by typing the client argument **structurally** (a
 `PrismaClientLike` shape) and reading model delegates off it at runtime. The
@@ -118,4 +120,7 @@ consumer's.
 ## Verify
 
 Run `runPersistenceConformance` from `@tanstack/ai-persistence/testkit` over a
-temporary SQLite database generated from the fragment, with `{ skip: ['locks'] }`.
+temporary SQLite database generated from the fragment. All four state stores
+are provided, so pass no `skip` — and note that `skip` only ever accepts
+`'messages' | 'runs' | 'interrupts' | 'metadata'`. Locks are not a state store
+and the suite does not cover them.

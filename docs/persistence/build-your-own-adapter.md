@@ -26,7 +26,7 @@ An adapter is an object with a `stores` map:
 
 ```ts ignore
 import type {
-  AIPersistence,
+  ChatTranscriptPersistence,
   MessageStore,
   RunStore,
 } from '@tanstack/ai-persistence'
@@ -35,16 +35,26 @@ import type {
 declare const messages: MessageStore
 declare const runs: RunStore
 
-const persistence: AIPersistence = {
+const persistence: ChatTranscriptPersistence = {
   stores: { messages, runs },
 }
 ```
 
 Each store is independent. Provide only the ones you need: `messages` for the
 transcript, `runs` for run lifecycle, `interrupts` for durable approvals (needs
-`runs`), `metadata` for scoped key/value state, `locks` for cross-worker
-coordination. The middleware turns on behavior for whatever stores it finds, so a
-`messages`-only adapter is a valid adapter.
+`runs`), `metadata` for namespaced key/value state. The middleware turns on
+behavior for whatever stores it finds, so a `messages`-only adapter is a valid
+adapter.
+
+Those four are the *only* keys `stores` accepts — anything else throws
+`Unknown AIPersistence store key` at construction. Cross-worker coordination is
+a separate concern with its own seam (`LockStore` + `withLocks`); see
+[Controls](./controls).
+
+Annotate the value with a named shape — `ChatPersistence` for all four,
+`ChatTranscriptPersistence` for the floor. Bare `AIPersistence` is the
+all-optional bag, and `withPersistence` rejects it because `stores.messages` is
+possibly `undefined`.
 
 Every method signature and invariant is in the
 [store interface reference](#store-interface-reference) at the end of this page.
@@ -291,8 +301,12 @@ rejects unknown keys at runtime.
 ```ts ignore
 import { DatabaseSync } from 'node:sqlite'
 import { defineAIPersistence } from '@tanstack/ai-persistence'
+import type { ChatPersistence } from '@tanstack/ai-persistence'
 
-export function sqlitePersistence(options: { url: string; migrate?: boolean }) {
+export function sqlitePersistence(options: {
+  url: string
+  migrate?: boolean
+}): ChatPersistence {
   const db = new DatabaseSync(options.url)
   if (options.migrate) db.exec(SCHEMA_SQL)
   return defineAIPersistence({
@@ -306,8 +320,9 @@ export function sqlitePersistence(options: { url: string; migrate?: boolean }) {
 }
 ```
 
-That is a complete backend. There is no `locks` store here, so work coordinated
-across multiple workers would compose one in (see [Controls](./controls)).
+That is a complete backend. Work coordinated across multiple workers also needs
+a `LockStore`, which is wired separately with `withLocks` rather than added to
+`stores` (see [Controls](./controls)).
 
 Wire it into `chat()` exactly like any other persistence:
 
@@ -353,7 +368,7 @@ threads per user, add `created_at`/`updated_at` audit columns, add a tenant id.
 Keep added columns nullable or defaulted so the store's inserts still succeed. The
 TanStack AI stores never read or write columns they do not know about.
 
-**Adopt part of it.** You rarely need all five stores in the same database. Put
+**Adopt part of it.** You rarely need all four stores in the same database. Put
 `messages` and `runs` in your primary database and nothing else, then fill the
 rest from another source with `composePersistence`:
 
@@ -384,28 +399,66 @@ rules that are easy to get subtly wrong.
 import { runPersistenceConformance } from '@tanstack/ai-persistence/testkit'
 import { sqlitePersistence } from './sqlite-persistence'
 
-runPersistenceConformance(
-  'my sqlite adapter',
-  () => sqlitePersistence({ url: ':memory:', migrate: true }),
-  // Declare every store you intentionally do not provide.
-  { skip: ['locks'] },
+runPersistenceConformance('my sqlite adapter', () =>
+  sqlitePersistence({ url: ':memory:', migrate: true }),
 )
 ```
 
-A store that is absent and not listed in `skip` fails the suite loudly, so you
-cannot ship a half-wired adapter by accident. When this is green, your adapter is
-a drop-in for `withPersistence`. The `examples/ts-react-chat` app runs exactly
-this test against its SQLite backend.
+The adapter above provides all four stores, so there is nothing to declare. A
+partial adapter lists what it deliberately omits:
+
+```ts
+import { runPersistenceConformance } from '@tanstack/ai-persistence/testkit'
+import { transcriptOnlyPersistence } from './transcript-only'
+
+runPersistenceConformance(
+  'transcript-only adapter',
+  () => transcriptOnlyPersistence(),
+  { skip: ['runs', 'interrupts', 'metadata'] },
+)
+```
+
+`skip` accepts only the four state store keys. A store that is absent and not
+listed fails the suite loudly, so you cannot ship a half-wired adapter by
+accident. When this is green, your adapter is a drop-in for `withPersistence`.
+The `examples/ts-react-chat` app runs exactly this test against its SQLite
+backend.
 
 ## Recipes for common stacks
 
-The three backends TanStack AI grew up with (Drizzle, Prisma, Cloudflare D1 plus
-Durable Objects) are each a worked example of the patterns on this page. If you
-are building on one of those, the skills shipped in `@tanstack/ai-persistence`
-walk through each one: the Drizzle schema and `onConflict` idempotency, the
-Prisma models fragment and BigInt timestamp handling, and the Cloudflare D1 plus
-Durable Object lock store. Ask your AI assistant for the "build a Drizzle / Prisma
-/ Cloudflare persistence adapter" skill.
+Drizzle, Prisma, and Cloudflare D1 (plus Durable Objects for locks) are each a
+worked example of the patterns on this page, and `@tanstack/ai-persistence`
+ships each one as an [Agent Skill](../getting-started/agent-skills) your coding
+assistant can load: the Drizzle schema and `onConflict` idempotency, the Prisma
+models fragment and BigInt timestamp handling, and the Cloudflare D1 stores plus
+a lease-backed Durable Object lock store.
+
+Install them with [TanStack Intent](https://tanstack.com/intent/latest/docs/overview),
+which scans `node_modules` for packages that ship skills and writes the mappings
+into your agent's config (`AGENTS.md`, `CLAUDE.md`, `.cursorrules`, …):
+
+```bash
+pnpm add @tanstack/ai-persistence
+npx @tanstack/intent@latest install
+```
+
+Then ask your assistant to build the adapter — it will pull the matching skill
+into context. The skills are plain files if you prefer to read or reference them
+directly:
+
+| Skill                                                | Covers                                                     |
+| ---------------------------------------------------- | ---------------------------------------------------------- |
+| `tanstack-ai-persistence`                            | Entry point — routes to everything below                   |
+| `tanstack-ai-persistence-server`                     | `withPersistence`, run lifecycle, interrupts, `reconstructChat` |
+| `tanstack-ai-persistence-client`                     | Browser persistence on `useChat`                           |
+| `tanstack-ai-persistence-stores`                     | The store contracts and their invariants                   |
+| `tanstack-ai-persistence-locks`                      | `LockStore` / `withLocks` coordination                     |
+| `tanstack-ai-persistence-build-drizzle-adapter`      | Drizzle SQLite + Postgres recipe                           |
+| `tanstack-ai-persistence-build-prisma-adapter`       | Prisma models fragment + delegate mapping                  |
+| `tanstack-ai-persistence-build-cloudflare-adapter`   | D1 stores + Durable Object lock store                      |
+
+They live at
+`node_modules/@tanstack/ai-persistence/skills/<skill-name>/SKILL.md`.
 
 ## Store interface reference
 
@@ -491,15 +544,30 @@ composite identity. A stored `null` is indistinguishable from absence at the typ
 level, so wrap a value you must persist as `null` (e.g. `{ value: null }`), or
 reject nullish values outright the way the SQLite store above does.
 
-### LockStore
+## Not a store: `LockStore`
 
-`LockStore` serializes work that may run on multiple workers. A lock
-implementation should use leases or another recovery mechanism so a crashed owner
-cannot block forever. `withLock` passes an `AbortSignal` to the critical section;
-lease-backed implementations abort that signal when ownership can no longer be
-guaranteed, and callbacks must then stop starting external mutations and pass the
-signal to cancellable dependencies. The package ships an in-process
-`InMemoryLockStore` for single-process use.
+`LockStore` serializes work that may run on multiple workers. It is **not** part
+of `AIPersistence.stores` and is not composed with `composePersistence` — state
+persistence and mutual exclusion are separate concerns. Wire it with `withLocks`
+instead:
+
+```ts
+import { withLocks, InMemoryLockStore } from '@tanstack/ai-persistence'
+
+const locks = withLocks(new InMemoryLockStore())
+```
+
+A lock implementation should use leases or another recovery mechanism so a
+crashed owner cannot block forever. `withLock` passes an `AbortSignal` to the
+critical section; lease-backed implementations abort that signal when ownership
+can no longer be guaranteed, and callbacks must then stop starting external
+mutations and pass the signal to cancellable dependencies. The package ships an
+in-process `InMemoryLockStore` for single-process use; multi-instance
+deployments need a distributed implementation, and the Cloudflare Durable Object
+recipe is in the `tanstack-ai-persistence-build-cloudflare-adapter` skill.
+
+The conformance testkit covers state stores only, so a lock store needs its own
+tests.
 
 ## Where to go next
 

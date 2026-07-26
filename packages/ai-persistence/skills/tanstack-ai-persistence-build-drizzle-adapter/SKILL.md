@@ -1,29 +1,33 @@
 ---
 name: tanstack-ai-persistence-build-drizzle-adapter
-description: Use when building a Drizzle-ORM SQLite persistence backend on the @tanstack/ai-persistence core — covers the schema, the four stores with onConflict idempotency, JSON columns, bundled migrations, and the edge-safe root vs Node /sqlite split.
+description: Use when building a Drizzle-ORM persistence backend on the @tanstack/ai-persistence core — covers the SQLite and Postgres schemas, the four stores with onConflict idempotency, JSON columns, schema ownership via drizzle-kit, and the edge-safe root vs Node /sqlite split.
 ---
 
 # Build a Drizzle Persistence Adapter
 
 You want TanStack AI chat state (`messages`, `runs`, `interrupts`, `metadata`)
-in a SQLite-family database through Drizzle ORM: better-sqlite3, libsql, D1,
-`node:sqlite`. This builds the adapter on the `@tanstack/ai-persistence` core.
+in a database through Drizzle ORM: better-sqlite3, libsql, D1, `node:sqlite`,
+or Postgres (node-postgres, postgres.js, Neon, PGlite). This builds the adapter
+on the `@tanstack/ai-persistence` core.
 
 Read the **Build Your Own Adapter** guide
 (`docs/persistence/build-your-own-adapter.md`) first for the store contracts and
-invariants. This skill is the Drizzle-specific recipe. Every store here mirrors
-the reference in-memory backend in
-`@tanstack/ai-persistence` (`memory.ts`); the shared conformance testkit is the
-proof.
+invariants, and **tanstack-ai-persistence-stores** for the shape rules. This
+skill is the Drizzle-specific recipe. Every store here mirrors the reference
+in-memory backend in `@tanstack/ai-persistence` (`memory.ts`); the shared
+conformance testkit is the proof.
 
 ## Package shape
 
 Peer deps: `@tanstack/ai`, `@tanstack/ai-persistence`, `drizzle-orm >=0.44.0`.
 Dev deps: `drizzle-kit`. Two entry points:
 
-- the package root takes an already-created, migrated Drizzle DB and imports no
+- the module root takes an already-created, migrated Drizzle DB and imports no
   Node built-ins, so it is safe in edge runtimes (D1);
 - a `/sqlite` subpath is a Node-only convenience factory over `node:sqlite`.
+
+Annotate the factory's return as `ChatPersistence` — bare `AIPersistence` is
+the all-optional bag and `withPersistence` rejects it.
 
 ## Schema
 
@@ -122,7 +126,9 @@ function mapRun(row: typeof runs.$inferSelect): RunRecord {
 ```
 
 Assemble with `defineAIPersistence({ stores: { messages, runs, interrupts, metadata } })`.
-There is no `locks` store; consumers that need one compose it in.
+There is no `locks` store — `stores` accepts only those four keys. Consumers
+needing coordination wire a `LockStore` separately via `withLocks` (see
+**tanstack-ai-persistence-locks**).
 
 ## Node /sqlite factory
 
@@ -149,33 +155,50 @@ export function sqlitePersistence(options: { url: string; migrate?: boolean }) {
 }
 ```
 
-## Migrations
+## Postgres
 
-Generate SQL with `drizzle-kit` from the schema, then embed the canonical `.sql`
-as a raw string in an ordered `sqliteMigrations: Array<{ id, filename, sql }>`.
-Apply each migration and its bookkeeping insert in one transaction against a
-`__tanstack_ai_migrations` table, so a failure leaves no partial schema. Ship a
-CLI (`tanstack-ai-drizzle-migrations`) that copies the SQL out, and a
-package-contract test that keeps the embedded asset byte-identical to the
-drizzle-kit output.
+The same four tables in `drizzle-orm/pg-core`: `jsonb` for the JSON payloads,
+`bigint({ mode: 'number' })` for epoch-ms timestamps, and a composite
+`primaryKey` on `(scope, key)` for metadata. The store bodies are
+unchanged — only the column builders and the `onConflictDoUpdate` target types
+differ. Take a `provider: 'sqlite' | 'pg'` option, declare it with overloads so
+`db` and `schema` must agree, and add a runtime dialect check so a mismatched
+pair fails at construction rather than on first query.
 
-## Own the schema
+## Schema ownership: schema-first, no bundled SQL
+
+**Do not ship SQL migrations or a migration runner.** The consumer owns the DDL
+and their `drizzle-kit` journal; inventing a parallel migration table behind
+their back is how schemas drift. Give them two supported paths:
+
+1. **Re-export the stock tables** from a `/sqlite-schema` or `/pg-schema`
+   subpath, so their `drizzle-kit` config picks the tables up and generates the
+   migration into their own journal. Tracks upstream table changes on upgrade.
+2. **Emit an owned starter** with a small schema CLI
+   (`tanstack-ai-drizzle-schema [--dialect pg]`) that writes the schema file
+   into their repo. They own it from then on — free to rename tables, add
+   columns, tune indexes.
 
 Let a consumer pass their own `{ schema }` to `drizzlePersistence(db, { schema })`.
 Because the stores read database names off the table objects, a renamed table or
 an extra app-owned column (a `userId` on `messages`) works through the same code.
-Validate the passed tables/columns exist at construction, and keep the required
-column data shapes with a compile-time schema type. Pick one DDL owner per
-database: the bundled SQL or the consumer's drizzle-kit journal, not both.
+Validate the passed tables/columns exist at construction, and pin the required
+column data shapes with a compile-time schema contract type. Pick **one** DDL
+owner per database.
+
+For a zero-config local dev path, an `ensureTables(db)` helper that issues
+`CREATE TABLE IF NOT EXISTS` is fine — keep it opt-in (`migrate: true`) and
+clearly separate from the consumer's journal.
 
 ## Verify
 
 ```ts ignore
 import { runPersistenceConformance } from '@tanstack/ai-persistence/testkit'
 
-runPersistenceConformance(
-  'drizzle-sqlite',
-  () => sqlitePersistence({ url: ':memory:', migrate: true }),
-  { skip: ['locks'] },
+runPersistenceConformance('drizzle-sqlite', () =>
+  sqlitePersistence({ url: ':memory:', migrate: true }),
 )
 ```
+
+Run it once per dialect. Every store is provided, so there is nothing to
+`skip` — and `skip` never accepts `'locks'`, which is not a state store.

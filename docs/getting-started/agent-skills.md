@@ -30,7 +30,12 @@ TanStack AI publishes skills inside its packages so the guidance travels with `n
 | Package | Skill | What it teaches |
 |---------|-------|-----------------|
 | `@tanstack/ai` | `ai-core` | Chat experience, tool calling, adapters, middleware, structured outputs, media generation, AG-UI protocol, custom backends |
+| `@tanstack/ai-persistence` | `tanstack-ai-persistence` | Server chat state (`withPersistence`), browser persistence, the store contracts, locks, and worked adapter recipes for Drizzle, Prisma, and Cloudflare D1 |
 | `@tanstack/ai-code-mode` | `ai-code-mode` | Setting up Code Mode with a sandbox driver and registering server tools |
+
+Skills route to each other: `ai-core` points at the companion packages'
+skills, and `tanstack-ai-persistence` is an entry point that routes to its own
+sub-skills (`-server`, `-client`, `-stores`, `-locks`, `-build-*-adapter`).
 
 Each skill lives under `node_modules/<package>/skills/<skill-name>/SKILL.md` once the package is installed.
 
@@ -68,6 +73,8 @@ The install command appends (or creates) an `intent-skills` block that looks lik
 skills:
   - task: "Building chat, tool calling, adapters, or streaming with TanStack AI"
     load: "node_modules/@tanstack/ai/skills/ai-core/SKILL.md"
+  - task: "Persisting chat state, building a persistence adapter, or wiring locks"
+    load: "node_modules/@tanstack/ai-persistence/skills/tanstack-ai-persistence/SKILL.md"
   - task: "Setting up Code Mode with TanStack AI"
     load: "node_modules/@tanstack/ai-code-mode/skills/ai-code-mode/SKILL.md"
 <!-- intent-skills:end -->

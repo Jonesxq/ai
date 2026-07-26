@@ -389,12 +389,12 @@ import {
   toServerSentEventsResponse,
 } from '@tanstack/ai'
 import { openaiText } from '@tanstack/ai-openai'
-import { withPersistence } from '@tanstack/ai-persistence'
-import { sqlitePersistence } from '@tanstack/ai-persistence-drizzle/sqlite'
+import { withPersistence, memoryPersistence } from '@tanstack/ai-persistence'
 
-const persistence = sqlitePersistence({
-  url: 'file:.tanstack-ai/state.sqlite',
-})
+// memoryPersistence() is the in-process reference backend (dev/tests). For a
+// durable one, implement the store contracts against your database — see the
+// @tanstack/ai-persistence skills.
+const persistence = memoryPersistence()
 
 export async function POST(request: Request) {
   const params = await chatParamsFromRequest(request)
@@ -427,31 +427,23 @@ thread:
 
 ### Backends
 
-Every backend returns an `AIPersistence` you pass straight to
-`withPersistence`:
+`@tanstack/ai-persistence` ships **contracts, not a database backend**. It
+provides the four store interfaces (`messages`, `runs`, `interrupts`,
+`metadata`), the middleware that drives them, `memoryPersistence()` for
+dev/tests, and a conformance testkit. For anything durable you implement the
+stores against your own database and pass the result to `withPersistence`.
 
-| Backend                             | Factory                                        | Import                                    |
-| ----------------------------------- | ---------------------------------------------- | ----------------------------------------- |
-| In-memory (dev/tests)               | `memoryPersistence()`                          | `@tanstack/ai-persistence`                |
-| Drizzle SQLite/Postgres (edge-safe) | `drizzlePersistence(db, { provider, schema })` | `@tanstack/ai-persistence-drizzle`        |
-| Node SQLite convenience factory     | `sqlitePersistence({ url })`                   | `@tanstack/ai-persistence-drizzle/sqlite` |
-| Prisma                              | `prismaPersistence(prisma)`                    | `@tanstack/ai-persistence-prisma`         |
-| Cloudflare D1 (state)               | `cloudflarePersistence({ d1 })`                | `@tanstack/ai-persistence-cloudflare`     |
+Annotate your factory with a named shape (`ChatPersistence` /
+`ChatTranscriptPersistence`) — bare `AIPersistence` is the all-optional bag and
+`withPersistence` rejects it.
 
-Locks are separate from state: `withLocks(lockStore)` + e.g.
-`createDurableObjectLockStore(env.AI_LOCKS)` from
-`@tanstack/ai-persistence-cloudflare`.
+Locks are separate from state and are **not** a `stores` key: wire a
+`LockStore` with `withLocks(lockStore)`.
 
-`drizzlePersistence(db, { provider, schema })` is the edge-safe root —
-`provider` is `'sqlite'` (any SQLite-compatible Drizzle database, including
-Cloudflare D1) or `'pg'` (node-postgres, postgres.js, Neon, PGlite), and `db`
-plus the required `schema` must match it (enforced by overloads and a runtime
-dialect check). Get the schema by re-exporting the `/sqlite-schema` or
-`/pg-schema` subpath (stock tables), emitting an owned copy via
-`tanstack-ai-drizzle-schema [--dialect pg]`, or `createDefaultSqliteSchema()` /
-`createDefaultPgSchema()`. `sqlitePersistence` is Node-only and lives at the
-`/sqlite` subpath. Compose backends per store with
-`composePersistence(base, { overrides })`.
+**Full guidance lives in the package's own skills** — start at
+`node_modules/@tanstack/ai-persistence/skills/tanstack-ai-persistence/SKILL.md`,
+which routes to the server, client, stores, locks, and adapter-recipe
+(Drizzle / Prisma / Cloudflare) sub-skills.
 
 ### Resume reconstruction is the middleware's job (server-authoritative path)
 
@@ -657,4 +649,4 @@ Source: docs/advanced/middleware.md
 - See also: **ai-core/chat-experience/SKILL.md** -- Middleware hooks into the chat lifecycle
 - See also: **ai-core/structured-outputs/SKILL.md** -- Middleware now wraps the final structured-output call; use `onStructuredOutputConfig` for JSON-Schema transforms
 - See also: **ai-core/ag-ui-protocol/SKILL.md** -- Reading the `sandbox.file` / `sandbox.file.diff` `CUSTOM` chunks the sandbox runtime emits alongside these `sandbox` hooks, via `ChatStream`'s typed `KnownCustomEvent` narrowing
-- See also: **ai-core/persistence/SKILL.md** -- Full persistence suite (`withPersistence`, client storage, backends, custom stores, locks). This file only sketches server `withPersistence`.
+- See also: **`@tanstack/ai-persistence` skills** (`skills/tanstack-ai-persistence/SKILL.md` in that package) -- Full persistence suite (`withPersistence`, client storage, store contracts, adapter recipes, locks). This file only sketches server `withPersistence`.

@@ -265,10 +265,26 @@ from whichever stores are present (with entrypoint requirements — see
 | `metadata` | App and integration key/value state. |
 
 Named shapes: `ChatTranscriptStores` (messages floor), `ChatPersistenceStores`
-(full packaged backend), `ChatWithInterruptsStores`. See [Controls](./controls).
+(all four), `ChatWithInterruptsStores`. See [Controls](./controls).
 
 **Locks** (cross-worker coordination) are a separate concern: use `withLocks`
 and a `LockStore` implementation, not a fifth state store.
+
+`@tanstack/ai-persistence` ships the contracts, the middleware, an in-memory
+reference backend, and a conformance testkit — not a backend for your database.
+You implement the stores against whatever you already run;
+[Build your own adapter](./build-your-own-adapter) walks through a complete one.
+
+## Teach your coding agent
+
+The package ships [Agent Skills](../getting-started/agent-skills) covering the
+server middleware, browser persistence, the store contracts, locks, and worked
+Drizzle / Prisma / Cloudflare adapter recipes. Wire them into Claude Code,
+Cursor, Copilot, or Codex with TanStack Intent:
+
+```bash
+npx @tanstack/intent@latest install
+```
 
 ## Where to go next
 

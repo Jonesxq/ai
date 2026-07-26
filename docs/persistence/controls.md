@@ -107,15 +107,16 @@ import {
   withPersistence,
   withLocks,
   InMemoryLockStore,
+  memoryPersistence,
 } from '@tanstack/ai-persistence'
-import { createDurableObjectLockStore } from '@tanstack/ai-persistence-cloudflare'
 
-middleware: [
+const persistence = memoryPersistence()
+
+const middleware = [
   withPersistence(persistence),
-  // Single process:
+  // Single process. Multi-instance deployments swap in a distributed
+  // LockStore — see the build-your-own-adapter guide.
   withLocks(new InMemoryLockStore()),
-  // Multi-instance (Cloudflare):
-  // withLocks(createDurableObjectLockStore(env.AI_LOCKS)),
 ]
 ```
 

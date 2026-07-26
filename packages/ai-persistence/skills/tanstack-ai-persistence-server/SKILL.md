@@ -1,14 +1,15 @@
 ---
-name: ai-core/persistence/server
+name: tanstack-ai-persistence-server
 description: >
   Server chat state with withPersistence from @tanstack/ai-persistence.
   Authoritative transcript, run lifecycle, durable interrupts/approvals,
   chatParamsFromRequest, reconstructChat, snapshotStreaming. Use when the
   server owns history, multi-device, or durable tool approvals. NOT client
-  localStorage (see persistence/client) and NOT stream reconnect alone.
+  localStorage (see tanstack-ai-persistence-client) and NOT stream reconnect
+  alone.
 type: sub-skill
-library: tanstack-ai
-library_version: '0.10.0'
+library: tanstack-ai-persistence
+library_version: '0.0.0'
 sources:
   - 'TanStack/ai:docs/persistence/chat-persistence.md'
   - 'TanStack/ai:docs/persistence/overview.md'
@@ -17,7 +18,7 @@ sources:
 
 # Server Chat Persistence
 
-> Builds on **ai-core/persistence**. Package: `@tanstack/ai-persistence`.
+> Builds on **tanstack-ai-persistence**. Package: `@tanstack/ai-persistence`.
 
 `withPersistence(persistence)` is a `ChatMiddleware` that writes chat **state**
 to a backend: messages, runs, interrupts (optional metadata). It does not
@@ -33,11 +34,8 @@ import {
 } from '@tanstack/ai'
 import { openaiText } from '@tanstack/ai-openai'
 import { withPersistence } from '@tanstack/ai-persistence'
-import { sqlitePersistence } from '@tanstack/ai-persistence-drizzle/sqlite'
-
-const persistence = sqlitePersistence({
-  url: 'file:.data/chat.sqlite',
-})
+// Your adapter — see tanstack-ai-persistence-stores.
+import { persistence } from './persistence'
 
 export async function POST(request: Request) {
   const params = await chatParamsFromRequest(request)
@@ -57,6 +55,9 @@ Always pass `threadId` and `runId` from the client (via
 `chatParamsFromRequest` / body helpers). Forward `resume` when the client
 resolves pending interrupts.
 
+For dev and tests, `memoryPersistence()` from `@tanstack/ai-persistence` is a
+drop-in backend that implements all four stores in process.
+
 ## What each store does
 
 | Store        | Role                                    | Required?                                 |
@@ -66,8 +67,10 @@ resolves pending interrupts.
 | `interrupts` | Pending/resolved tool approvals & waits | Optional; **requires** `runs`             |
 | `metadata`   | App-owned namespaced key/value          | Optional                                  |
 
-Named shapes: `ChatTranscriptPersistence` (floor), `ChatPersistence` (all four —
-what packaged backends return). Prefer those over a sparse bag type.
+Named shapes: `ChatTranscriptPersistence` (floor), `ChatPersistence` (all four).
+**Annotate your factory with one of these**, not with bare `AIPersistence` —
+the unparameterized type is the all-optional bag, and `withPersistence` rejects
+it because `stores.messages` is possibly `undefined`.
 
 ## Authoritative-history contract
 
@@ -154,7 +157,13 @@ Persistence keys and resume need stable ids. Use `chatParamsFromRequest`.
 
 ### HIGH: Interrupts without `runs`
 
-`interrupts` requires `runs`. Packaged backends include both.
+`interrupts` requires `runs`; `withPersistence` throws otherwise.
+
+### HIGH: Typing a factory as bare `AIPersistence`
+
+`AIPersistence` defaults to the sparse all-optional bag, so `withPersistence`
+and `reconstructChat` reject the value. Return `ChatPersistence` (or
+`ChatTranscriptPersistence`) instead.
 
 ### MEDIUM: Expecting `withPersistence` to reconnect a dropped stream
 
@@ -162,8 +171,7 @@ That is delivery durability (resumable streams), not state persistence.
 
 ## Cross-references
 
-- **ai-core/persistence** — layers and recommended stack
-- **ai-core/persistence/backends** — factories and schema ownership
-- **ai-core/persistence/custom-stores** — implement interfaces
-- **ai-core/persistence/client** — browser half
-- **ai-core/persistence/locks** — multi-instance coordination
+- **tanstack-ai-persistence** — layers and recommended stack
+- **tanstack-ai-persistence-stores** — implement the store interfaces
+- **tanstack-ai-persistence-client** — browser half
+- **tanstack-ai-persistence-locks** — multi-instance coordination

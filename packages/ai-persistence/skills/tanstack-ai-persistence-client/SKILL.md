@@ -1,14 +1,14 @@
 ---
-name: ai-core/persistence/client
+name: tanstack-ai-persistence-client
 description: >
   Browser chat persistence on useChat / ChatClient: localStoragePersistence,
   sessionStoragePersistence, indexedDBPersistence. Client-authoritative
   (full transcript) vs server-authoritative (messages: false resume pointer).
   Reload restore, pending interrupts, mid-stream rejoin with delivery
-  durability. Use for SPA reload durability — NOT server SQL history alone.
+  durability. Use for SPA reload durability — NOT server history alone.
 type: sub-skill
-library: tanstack-ai
-library_version: '0.10.0'
+library: tanstack-ai-persistence
+library_version: '0.0.0'
 sources:
   - 'TanStack/ai:docs/persistence/client-persistence.md'
   - 'TanStack/ai:docs/persistence/overview.md'
@@ -16,7 +16,13 @@ sources:
 
 # Client Persistence
 
-> Builds on **ai-core/persistence** and **ai-core/chat-experience**.
+> Builds on **tanstack-ai-persistence** and `ai-core/chat-experience` in
+> `@tanstack/ai`.
+>
+> **Package note:** the browser adapters below ship in the **framework**
+> packages (`@tanstack/ai-react` and friends), not in
+> `@tanstack/ai-persistence`. This skill lives beside the server persistence
+> skills because the two halves are one story.
 
 A `ChatClient` / `useChat` keeps messages in memory. The `persistence` option
 stores one record per `threadId` so a reload can repaint the transcript,
@@ -97,17 +103,24 @@ browser storage).
    (`toServerSentEventsResponse(stream, { durability: … })`) so the client can
    `joinRun` and finish the reply. Persistence alone is not enough.
 
-## Stable `threadId`
+## Stable `threadId` is the identity
 
-Persistence keys on `threadId`. Without a stable id, each load is a new chat.
-Generate server-side or from a route param the user owns; do not randomize per
-mount.
+Persistence keys on `threadId`. The hooks have **no separate `id` option** — a
+chat's identity _is_ its `threadId`. Without a stable one, each load is a new
+chat. Generate it server-side or from a route param the user owns; do not
+randomize per mount.
 
 ## Common mistakes
 
 ### HIGH: No `threadId`
 
 Record cannot be found after reload.
+
+### HIGH: Passing `id` to `useChat`
+
+Removed — `threadId` is the identity. (`ChatClient` still accepts `id` directly
+as a lower-level escape hatch for keying storage separately from the wire
+thread; the framework hooks do not.)
 
 ### HIGH: `messages: false` without server history
 
@@ -124,6 +137,6 @@ IndexedDB with care.
 
 ## Cross-references
 
-- **ai-core/persistence/server** — authoritative server half
-- **ai-core/chat-experience** — `useChat`, resumable connections
+- **tanstack-ai-persistence-server** — authoritative server half
+- **ai-core/chat-experience** (`@tanstack/ai`) — `useChat`, resumable connections
 - Resumable streams docs — mid-stream rejoin

@@ -23,7 +23,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { defineAIPersistence } from '@tanstack/ai-persistence'
 import type { ModelMessage, TokenUsage } from '@tanstack/ai'
 import type {
-  AIPersistence,
+  ChatPersistence,
   InterruptRecord,
   InterruptStore,
   MessageStore,
@@ -360,16 +360,20 @@ export interface SqlitePersistenceOptions {
 }
 
 /**
- * Build an `AIPersistence` over a `node:sqlite` database. The returned object
+ * Build a `ChatPersistence` over a `node:sqlite` database. The returned object
  * also exposes `close()` to release the file handle.
  *
- * Provides `messages`, `runs`, `interrupts`, and `metadata` stores — there is no
- * distributed `locks` store, so chat persistence coordinated across multiple
- * workers would compose one in separately.
+ * Provides all four state stores (`messages`, `runs`, `interrupts`,
+ * `metadata`). Cross-worker coordination is a separate seam — a `LockStore`
+ * wired with `withLocks`, not a fifth entry in `stores`.
+ *
+ * Annotate the return as `ChatPersistence`, not bare `AIPersistence`: the
+ * unparameterized type is the all-optional store bag, and `withPersistence`
+ * rejects it because `stores.messages` is possibly `undefined`.
  */
 export function sqlitePersistence(
   options: SqlitePersistenceOptions,
-): AIPersistence & { close: () => void } {
+): ChatPersistence & { close: () => void } {
   const filename = normalizeSqliteUrl(options.url)
   ensureParentDirectory(filename)
   const db = new DatabaseSync(filename)

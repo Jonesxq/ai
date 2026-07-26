@@ -1,26 +1,27 @@
 ---
-name: ai-core/persistence
+name: tanstack-ai-persistence
 description: >
-  Durability and state persistence for TanStack AI chats. Routes to server chat
-  persistence (withPersistence), client persistence (localStorage/IndexedDB),
-  packaged backends (Drizzle/Prisma/Cloudflare), custom stores, and locks.
-  Distinguishes delivery durability (resumable streams) from conversation
-  state. Use when conversations must survive reloads, multi-device, approvals,
-  or server restarts — NOT for stream reconnect alone (resumable streams).
-type: sub-skill
-library: tanstack-ai
-library_version: '0.10.0'
+  Durability and state persistence for TanStack AI chats with
+  @tanstack/ai-persistence. Routes to server chat persistence (withPersistence),
+  client persistence (localStorage/IndexedDB), the store contracts, adapter
+  recipes, and locks. Distinguishes delivery durability (resumable streams) from
+  conversation state. Use when conversations must survive reloads, multi-device,
+  approvals, or server restarts — NOT for stream reconnect alone.
+type: core
+library: tanstack-ai-persistence
+library_version: '0.0.0'
 sources:
   - 'TanStack/ai:docs/persistence/overview.md'
   - 'TanStack/ai:docs/persistence/chat-persistence.md'
   - 'TanStack/ai:docs/persistence/client-persistence.md'
   - 'TanStack/ai:docs/persistence/controls.md'
-  - 'TanStack/ai:docs/resumable-streams/overview.md'
+  - 'TanStack/ai:docs/persistence/build-your-own-adapter.md'
 ---
 
-# Persistence
+# TanStack AI Persistence
 
-> **Dependency note:** Builds on ai-core and usually ai-core/chat-experience.
+> Builds on the `ai-core` skill in `@tanstack/ai`, and usually
+> `ai-core/chat-experience`.
 
 TanStack AI splits **delivery durability** from **state persistence**. They
 share no code and solve different problems.
@@ -33,22 +34,41 @@ share no code and solve different problems.
 A replayable stream is **not** a saved conversation. A saved conversation is
 **not** a live stream. Production apps often use both.
 
+## Persistence is a contract, not a database
+
+`@tanstack/ai-persistence` ships the **store interfaces**, the middleware that
+drives them, an in-memory reference backend, and a conformance testkit. It does
+**not** ship a backend for your database, and you do not need one: implement the
+stores against whatever you already run — Postgres, SQLite, D1, Mongo — and hand
+the result to `withPersistence`. The core never inspects your tables.
+
+| Ships in the package                                             | What it is                                     |
+| ---------------------------------------------------------------- | ---------------------------------------------- |
+| `MessageStore` / `RunStore` / `InterruptStore` / `MetadataStore` | The four state contracts                       |
+| `withPersistence` / `withGenerationPersistence`                  | Chat + generation middleware                   |
+| `memoryPersistence()`                                            | In-process reference backend (dev, tests)      |
+| `reconstructChat`                                                | Server hydrate route helper                    |
+| `LockStore` / `withLocks` / `InMemoryLockStore`                  | Coordination, **separate** from state stores   |
+| `@tanstack/ai-persistence/testkit`                               | `runPersistenceConformance` compatibility gate |
+
 ## Sub-skills
 
-| Need to...                                      | Read                                       |
-| ----------------------------------------------- | ------------------------------------------ |
-| Wire server-side chat history, runs, interrupts | ai-core/persistence/server/SKILL.md        |
-| Survive reloads in the browser                  | ai-core/persistence/client/SKILL.md        |
-| Pick Drizzle / Prisma / Cloudflare / memory     | ai-core/persistence/backends/SKILL.md      |
-| Implement or override store interfaces          | ai-core/persistence/custom-stores/SKILL.md |
-| Multi-instance locks (separate from state)      | ai-core/persistence/locks/SKILL.md         |
+| Need to...                                      | Read                                                      |
+| ----------------------------------------------- | --------------------------------------------------------- |
+| Wire server-side chat history, runs, interrupts | tanstack-ai-persistence-server/SKILL.md                   |
+| Survive reloads in the browser                  | tanstack-ai-persistence-client/SKILL.md                   |
+| Implement the store interfaces for your DB      | tanstack-ai-persistence-stores/SKILL.md                   |
+| Multi-instance locks (separate from state)      | tanstack-ai-persistence-locks/SKILL.md                    |
+| Build a Drizzle-backed adapter                  | tanstack-ai-persistence-build-drizzle-adapter/SKILL.md    |
+| Build a Prisma-backed adapter                   | tanstack-ai-persistence-build-prisma-adapter/SKILL.md     |
+| Build a Cloudflare D1 + Durable Object adapter  | tanstack-ai-persistence-build-cloudflare-adapter/SKILL.md |
 
 ## State persistence has two halves
 
-| Half       | Stores                                           | Survives                         | Typical use                              |
-| ---------- | ------------------------------------------------ | -------------------------------- | ---------------------------------------- |
-| **Client** | transcript ± resume pointer in browser storage   | reload / tab close (per browser) | SPA restore, offline-first               |
-| **Server** | messages, runs, interrupts, metadata in SQL/D1/… | restart + multi-device           | authoritative history, durable approvals |
+| Half       | Stores                                          | Survives                         | Typical use                              |
+| ---------- | ----------------------------------------------- | -------------------------------- | ---------------------------------------- |
+| **Client** | transcript ± resume pointer in browser storage  | reload / tab close (per browser) | SPA restore, offline-first               |
+| **Server** | messages, runs, interrupts, metadata in your DB | restart + multi-device           | authoritative history, durable approvals |
 
 They are independent. Use either alone or both.
 
@@ -95,11 +115,8 @@ import {
 } from '@tanstack/ai'
 import { openaiText } from '@tanstack/ai-openai'
 import { withPersistence } from '@tanstack/ai-persistence'
-import { sqlitePersistence } from '@tanstack/ai-persistence-drizzle/sqlite'
-
-const persistence = sqlitePersistence({
-  url: 'file:.tanstack-ai/state.sqlite',
-})
+// Your adapter — see tanstack-ai-persistence-stores.
+import { persistence } from './persistence'
 
 export async function POST(request: Request) {
   const params = await chatParamsFromRequest(request)
@@ -146,12 +163,13 @@ mount (thread id is the key). Pair with a server load path such as
 2. **`saveThread` is full overwrite**, never append.
 3. **`createOrResume` is insert-if-absent** for the same `runId`.
 4. **Interrupt `create` is insert-if-absent** — never clobber resolved → pending.
-5. **Locks ≠ state.** Use `withLocks`, not a field on `AIPersistence.stores`.
-6. **Schema-first SQL.** Drizzle/Prisma/D1 do not invent migrations for you — own the journal (see backends skill).
-7. **Authorize thread access** at the route boundary.
+5. **Locks ≠ state.** Use `withLocks`, not a key on `AIPersistence.stores` — `stores` accepts only `messages`, `runs`, `interrupts`, `metadata` and throws on anything else.
+6. **You own the schema.** No package invents migrations for you.
+7. **Run the conformance testkit** against any adapter you write.
+8. **Authorize thread access** at the route boundary.
 
 ## Cross-references
 
-- **ai-core/chat-experience** — `useChat`, SSE, client `persistence` option overview
-- **ai-core/middleware** — middleware hooks; `withPersistence` is a ChatMiddleware
+- **ai-core/chat-experience** (`@tanstack/ai`) — `useChat`, SSE, client `persistence` option overview
+- **ai-core/middleware** (`@tanstack/ai`) — middleware hooks; `withPersistence` is a ChatMiddleware
 - **Resumable streams docs** — delivery durability only

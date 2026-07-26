@@ -17,7 +17,6 @@ sources:
   - 'TanStack/ai:docs/chat/thinking-content.md'
   - 'TanStack/ai:docs/advanced/multimodal-content.md'
   - 'TanStack/ai:docs/resumable-streams/overview.md'
-  - 'TanStack/ai:docs/chat/persistence.md'
   - 'TanStack/ai:docs/persistence/client-persistence.md'
 ---
 
@@ -547,9 +546,9 @@ off. No extra client code beyond the resumable connection.
 
 **Every framework, no extra code.** Durability rides the existing `persistence`
 option, so it works identically in `@tanstack/ai-react`, `-solid`, `-vue`,
-`-svelte`, `-angular`, and `-preact` — pass `persistence` (and a stable `id`) to
-the framework's `useChat` / `createChat` / `injectChat`; nothing is
-framework-specific.
+`-svelte`, `-angular`, and `-preact` — pass `persistence` (and a stable
+`threadId`, which is the chat's identity) to the framework's `useChat` /
+`createChat` / `injectChat`; nothing is framework-specific.
 
 > **Client vs. server durability.** This is the client (per-browser) half.
 > The authoritative, multi-user, server-side copy is the `withPersistence`
@@ -767,4 +766,4 @@ If not handled, the UI appears to hang with no feedback.
 - See also: **ai-core/tool-calling/SKILL.md** -- Most chats include tools
 - See also: **ai-core/adapter-configuration/SKILL.md** -- Adapter choice affects available features
 - See also: **ai-core/middleware/SKILL.md** -- Use middleware for analytics and lifecycle events
-- See also: **ai-core/persistence/SKILL.md** -- Server + client state persistence, backends, custom stores (deeper than Pattern 8)
+- See also: **`@tanstack/ai-persistence` skills** (`skills/tanstack-ai-persistence/SKILL.md` in that package) -- Server + client state persistence, store contracts, adapter recipes (deeper than Pattern 8)
