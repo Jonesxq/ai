@@ -566,13 +566,13 @@
           "label": "Migration Guide",
           "to": "migration/migration",
           "addedAt": "2026-04-15",
-          "updatedAt": "2026-07-10"
+          "updatedAt": "2026-07-22"
         },
         {
           "label": "From Vercel AI SDK",
           "to": "migration/migration-from-vercel-ai",
           "addedAt": "2026-04-20",
-          "updatedAt": "2026-07-10"
+          "updatedAt": "2026-07-22"
         },
         {
           "label": "AG-UI Client Compliance",
@@ -647,7 +647,7 @@
           "label": "OpenAI",
           "to": "adapters/openai",
           "addedAt": "2026-04-15",
-          "updatedAt": "2026-07-10"
+          "updatedAt": "2026-07-22"
         },
         {
           "label": "Anthropic",
@@ -659,13 +659,13 @@
           "label": "Google Gemini",
           "to": "adapters/gemini",
           "addedAt": "2026-04-15",
-          "updatedAt": "2026-07-10"
+          "updatedAt": "2026-07-22"
         },
         {
           "label": "Ollama",
           "to": "adapters/ollama",
           "addedAt": "2026-04-15",
-          "updatedAt": "2026-07-10"
+          "updatedAt": "2026-07-22"
         },
         {
           "label": "Grok (xAI)",
@@ -682,7 +682,8 @@
         {
           "label": "Mistral",
           "to": "adapters/mistral",
-          "updatedAt": "2026-07-10"
+          "addedAt": "2026-06-30",
+          "updatedAt": "2026-07-22"
         },
         {
           "label": "Cohere",

@@ -46,7 +46,7 @@ export class GeminiEmbeddingAdapter<
   protected client: GoogleGenAI
 
   constructor(config: GeminiEmbeddingConfig, model: TModel) {
-    super(model, config)
+    super(model, {})
     this.client = createGeminiClient(config)
   }
 
