@@ -1,4 +1,9 @@
-import type { ModelMessage, Scope, TokenUsage } from '@tanstack/ai'
+import type {
+  ModelMessage,
+  Scope,
+  SandboxStore,
+  TokenUsage,
+} from '@tanstack/ai'
 
 // Re-export the shared identity type so app code can import Scope from either
 // `@tanstack/ai` or `@tanstack/ai-persistence`. See {@link Scope} security notes:
@@ -13,9 +18,8 @@ export type { Scope }
 // EVOLUTION POLICY
 // ----------------
 // These store interfaces are the compatibility surface between the core
-// middleware and every backend — the in-memory reference store and every
-// adapter an application writes against its own database. To avoid breaking
-// existing adapters:
+// middleware and every backend (memory, drizzle, prisma, cloudflare, …).
+// To avoid breaking existing adapters:
 //
 //   - New store methods are added as OPTIONAL (`method?: (...) => ...`). The
 //     middleware feature-detects them (`store.method?.(...)`) and degrades
@@ -243,8 +247,9 @@ export interface MetadataStore {
  *
  * **Not a public product shape.** Prefer the named chat shapes below
  * ({@link ChatTranscriptStores}, {@link ChatPersistenceStores},
- * {@link ChatWithInterruptsStores}). Locks are not included (see
- * {@link withLocks}).
+ * {@link ChatWithInterruptsStores}, {@link ChatAndSandboxPersistenceStores}).
+ * Locks are not included (see {@link withLocks}). Optional `sandbox` is for
+ * durable sandbox resume and is not part of the chat-only shapes.
  *
  * @internal Exported from this module for generics; the package root does not
  * re-export this type — use a named shape or `AIPersistence<{ … }>` instead.
@@ -254,6 +259,12 @@ export interface AIPersistenceStores {
   runs?: RunStore
   interrupts?: InterruptStore
   metadata?: MetadataStore
+  /**
+   * Optional durable sandbox resume map. When present, {@link withPersistence}
+   * provides the shared `sandbox-store` capability so `withSandbox` can resume
+   * across processes. Stays out of the chat-only product shapes.
+   */
+  sandbox?: SandboxStore
 }
 
 /**
@@ -270,11 +281,11 @@ export interface ChatTranscriptStores {
 }
 
 /**
- * Full chat durability — all four state stores are present. This is what
- * `memoryPersistence()` returns, and the shape most adapters should declare.
+ * Full chat durability — what packaged backends return
+ * (`memoryPersistence`, Drizzle, Prisma, D1).
  *
- * Backends that only need a transcript should use
- * {@link ChatTranscriptStores} instead.
+ * All four state stores are present. Custom backends that only need a
+ * transcript should use {@link ChatTranscriptStores} instead.
  */
 export interface ChatPersistenceStores {
   messages: MessageStore
@@ -320,6 +331,19 @@ export type ChatPersistence = AIPersistence<ChatPersistenceStores>
 /** {@link AIPersistence} for {@link ChatWithInterruptsStores}. */
 export type ChatWithInterruptsPersistence =
   AIPersistence<ChatWithInterruptsStores>
+
+/**
+ * Full chat durability plus a durable sandbox resume store. Packaged backends
+ * that include the sandboxes table/model return this shape; chat-only apps use
+ * {@link ChatPersistence}.
+ */
+export interface ChatAndSandboxPersistenceStores extends ChatPersistenceStores {
+  sandbox: SandboxStore
+}
+
+/** {@link AIPersistence} for {@link ChatAndSandboxPersistenceStores}. */
+export type ChatAndSandboxPersistence =
+  AIPersistence<ChatAndSandboxPersistenceStores>
 
 type StoreKey = keyof AIPersistenceStores
 type ExactStoreKeys<TStores> =
@@ -426,6 +450,7 @@ const storeKeys = [
   'runs',
   'interrupts',
   'metadata',
+  'sandbox',
 ] satisfies Array<StoreKey>
 
 const storeKeySet = new Set<string>(storeKeys)
