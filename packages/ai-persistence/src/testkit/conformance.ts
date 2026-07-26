@@ -1,10 +1,11 @@
 /**
  * Shared conformance suite for the `AIPersistence` **state** contract.
  *
- * Every backend (memory, drizzle, prisma, cloudflare D1, …) runs this identical
- * suite so that schema drift or an implementation gap fails immediately. It
- * exercises every method of every store the persistence exposes and is the
- * authoritative compatibility gate for the store interfaces in `../types.ts`.
+ * Every backend runs this identical suite — the in-memory reference store and
+ * every adapter you write against your own database — so that schema drift or
+ * an implementation gap fails immediately. It exercises every method of every
+ * store the persistence exposes and is the authoritative compatibility gate for
+ * the store interfaces in `../types.ts`.
  *
  * Locks are not part of this suite — they are a separate coordination concern
  * (`LockStore` + `withLocks`), not state stores.

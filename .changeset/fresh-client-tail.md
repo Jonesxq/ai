@@ -1,7 +1,5 @@
 ---
 '@tanstack/ai-persistence': minor
-'@tanstack/ai-persistence-drizzle': minor
-'@tanstack/ai-persistence-prisma': minor
 '@tanstack/ai-client': minor
 ---
 
@@ -13,8 +11,10 @@ on a client-cached run id goes stale the moment a turn rolls to a new run. This
 moves the whole reconnect story onto the stable thread id, resolved by the server.
 
 - **`RunStore.findActiveRun(threadId)`** — new optional, feature-detected store
-  method returning the most recent `'running'` run for a thread (implemented for
-  memory, drizzle/SQLite — which also covers Cloudflare D1 — and prisma).
+  method returning the most recent `'running'` run for a thread. Implemented by
+  the in-memory reference backend and covered by the conformance testkit, so any
+  adapter that provides it is held to the same invariants (most-recent-running
+  wins, thread-scoped, null when idle).
 - **`reconstructChat` now returns `{ messages, activeRun, interrupts }`** (was a
   bare message array): the stored transcript as UI messages, a cursor to an
   in-flight run if one exists, and any pending human-in-the-loop interrupts (tool

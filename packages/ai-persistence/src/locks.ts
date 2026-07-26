@@ -39,8 +39,8 @@ export const [getLocks, provideLocks] = LocksCapability
 
 /**
  * In-memory {@link LockStore} — a per-key promise chain. Correct within a single
- * process; multi-instance correctness needs a distributed lock (e.g. Cloudflare
- * Durable Objects via `@tanstack/ai-persistence-cloudflare`).
+ * process; multi-instance correctness needs a distributed lock (e.g. a
+ * Cloudflare Durable Object — see the `build-cloudflare-adapter` skill).
  */
 export class InMemoryLockStore implements LockStore {
   private readonly chains = new Map<string, Promise<unknown>>()

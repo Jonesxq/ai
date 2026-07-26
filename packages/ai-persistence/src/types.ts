@@ -13,8 +13,9 @@ export type { Scope }
 // EVOLUTION POLICY
 // ----------------
 // These store interfaces are the compatibility surface between the core
-// middleware and every backend (memory, drizzle, prisma, cloudflare, …).
-// To avoid breaking existing adapters:
+// middleware and every backend — the in-memory reference store and every
+// adapter an application writes against its own database. To avoid breaking
+// existing adapters:
 //
 //   - New store methods are added as OPTIONAL (`method?: (...) => ...`). The
 //     middleware feature-detects them (`store.method?.(...)`) and degrades
@@ -269,11 +270,11 @@ export interface ChatTranscriptStores {
 }
 
 /**
- * Full chat durability — what packaged backends return
- * (`memoryPersistence`, Drizzle, Prisma, D1).
+ * Full chat durability — all four state stores are present. This is what
+ * `memoryPersistence()` returns, and the shape most adapters should declare.
  *
- * All four state stores are present. Custom backends that only need a
- * transcript should use {@link ChatTranscriptStores} instead.
+ * Backends that only need a transcript should use
+ * {@link ChatTranscriptStores} instead.
  */
 export interface ChatPersistenceStores {
   messages: MessageStore
