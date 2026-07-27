@@ -44,13 +44,12 @@ import {
   toServerSentEventsResponse,
 } from '@tanstack/ai'
 import { openaiImage } from '@tanstack/ai-openai'
-import { withGenerationPersistence } from '@tanstack/ai-persistence'
-import { sqlitePersistence } from '@tanstack/ai-persistence-drizzle/sqlite'
+import {
+  memoryPersistence,
+  withGenerationPersistence,
+} from '@tanstack/ai-persistence'
 
-const persistence = sqlitePersistence({
-  url: 'file:.tanstack-ai/generation.sqlite',
-  migrate: true,
-})
+const persistence = memoryPersistence()
 
 export async function POST(request: Request) {
   const durability = memoryStream(request)
@@ -84,9 +83,11 @@ export async function GET(request: Request) {
 ```
 
 Use the matching request kind for audio, TTS, video, or transcription.
-`withGenerationPersistence` records runs whenever a `runs` store is present. In
-production, swap `memoryStream` for `durableStream` from
-`@tanstack/ai-durable-stream`, where requests span processes.
+`withGenerationPersistence` records runs whenever a `runs` store is present.
+`memoryPersistence` keeps that store in process memory, which is fine for
+development; back it with a durable persistence backend in production. Likewise
+swap `memoryStream` for `durableStream` from `@tanstack/ai-durable-stream`,
+where requests span processes.
 
 Keep run ids unique across chat and generation when they share a backend,
 because `RunStore` is keyed by `runId`.
