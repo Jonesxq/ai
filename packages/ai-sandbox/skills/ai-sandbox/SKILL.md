@@ -337,15 +337,41 @@ resumable cursor**.
 
 Core primitives (`@tanstack/ai-sandbox`, transport- and runtime-agnostic):
 
-- **`RunEventLog` / `InMemoryRunEventLog`** — append-only, `seq`-indexed log of a
-  run's `StreamChunk`s with replay-then-tail reads. A dropped connection / new
-  tab / hibernated orchestrator reconnect by passing their last-seen `seq`
-  (`read({ fromSeq })`). `TerminalRunStatus` = `done | error | aborted`.
-- **`pipeToRunLog` / `RunController`** — the run driver. `pipeToRunLog` pumps a
-  `chat()` stream into a log and **never rejects**: a thrown stream error becomes
-  a terminal `RUN_ERROR` event, so detached clients always observe failures.
-  `RunController.start` is fire-and-track; `attach(runId, { fromSeq })` tails;
-  `drain()` awaits in-flight runs (e.g. in a `waitUntil`).
+- **`pipeToRunLog` / `RunController`** (the run driver), built on two of core's
+  (`@tanstack/ai`) durable seams: a `RunStore` for the run's lifecycle record
+  (the same store `withPersistence` uses for chat history) and a
+  `StreamDurability` for its event log (`memoryStream` or `durableStream`).
+  `pipeToRunLog(stream, { runs, durability, runId, threadId, signal })` pumps a
+  `chat()` stream into both and **never rejects**: a thrown stream error becomes
+  a terminal `RUN_ERROR` event plus the record's `error`, so a detached client
+  always observes failures. `threadId` is required. `RunController` wraps a
+  fixed `RunDeps = { runs, durability }`:
+
+  ```typescript
+  import { RunController } from '@tanstack/ai-sandbox'
+  import { memoryStream, InMemoryRunStore } from '@tanstack/ai'
+
+  const controller = new RunController({
+    runs: new InMemoryRunStore(),
+    durability: memoryStream(request),
+  })
+
+  const handle = controller.start({ runId, threadId, stream })
+  // handle.runId, handle.done (resolves with the terminal RunRecord)
+
+  for await (const { offset, chunk } of controller.attach(fromOffset)) {
+    // fromOffset is an opaque string the durability adapter produced; for
+    // memoryStream, '-1' replays from the start.
+  }
+
+  await controller.drain() // await every in-flight run, e.g. inside waitUntil
+  ```
+
+  Terminal statuses are `'completed' | 'failed' | 'aborted'` (core's
+  `TerminalRunStatus`); a run may also be `'running'` or `'interrupted'`
+  (`RunStatus`). A controller's `durability` is bound to a single run, so one
+  `RunController` instance drives at most one run at a time.
+
 - **Transport-agnostic tool-bridge** — `createToolBridgeCore` +
   `handleBridgeJsonRpc` are the portable core; `startHostToolBridge` is the
   `node:http` host transport. The `ToolBridgeProvisioner` capability injects the
@@ -366,8 +392,9 @@ Cloudflare runtime (`@tanstack/ai-sandbox-cloudflare`):
   re-exports. Two models via `mode`: `do-drives` (the DO runs `chat()`) and
   `colocated` (harness + bridge run in-container; the DO is a thin coordinator,
   pair with `runInContainerHarness` from `/runner`).
-- `DurableObjectRunEventLog` mirrors `InMemoryRunEventLog` over DO storage;
-  `timingSafeBearerEqualWeb` is the Web-Crypto constant-time bearer check.
+- `DurableObjectRunEventLog` mirrors `InMemoryRunEventLog` (both live in this
+  package) over DO storage; `timingSafeBearerEqualWeb` is the Web-Crypto
+  constant-time bearer check.
 
 ## Events
 

@@ -7,7 +7,7 @@
  * between chunks all resume cleanly: replay everything after the client's
  * `lastSeq`, then live-tail to terminal.
  *
- * Mirrors {@link InMemoryRunEventLog} from `@tanstack/ai-sandbox` exactly.
+ * Mirrors {@link InMemoryRunEventLog} exactly.
  * Storage layout (keys scoped by `runId` so one DO can host many runs):
  * - `rec:<runId>`        → the {@link RunRecord}
  * - `evt:<runId>:<seq8>` → the chunk for that seq (seq zero-padded to 8 digits
