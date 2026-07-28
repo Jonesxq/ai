@@ -118,7 +118,7 @@ export interface UseGenerationReturn<TOutput> {
 // inference site that works even for an optional nested property), which types
 // the callback parameter as `TResult` and narrows `result`. Inferring the
 // whole callback as a defaulted type parameter instead collapses to the
-// default, leaving the parameter `any` â€” a hard error under `strict`. See
+// default, leaving the parameter `any` — a hard error under `strict`. See
 // issue #848.
 export function useGeneration<
   TInput extends Record<string, any>,
@@ -220,7 +220,7 @@ export function useGeneration<
     })
   })
 
-  // Mount devtools only. Generation runs are never auto-started on mount â€”
+  // Mount devtools only. Generation runs are never auto-started on mount —
   // persisted state is read-only for display.
   onMount(() => {
     client().mountDevtools()

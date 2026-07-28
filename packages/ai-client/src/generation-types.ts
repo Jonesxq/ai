@@ -93,6 +93,12 @@ export interface GenerationEventSnapshot {
 }
 
 export interface GenerationResumeSnapshot {
+  /**
+   * Version of the persisted snapshot shape. Written on every persisted
+   * snapshot so future shape changes can migrate (or reject) old records.
+   * Optional so hand-written seeds don't need to set it; absent means `1`.
+   */
+  schemaVersion?: 1
   resumeState: GenerationResumeState | null
   status: GenerationResumeStatus
   activity?: PersistedArtifactRef['source']['activity']
@@ -191,21 +197,24 @@ export interface GenerationClientOptions<_TInput, TResult, TOutput = TResult> {
   devtools?: Partial<AIDevtoolsClientMetadata>
 
   /**
-   * Initial lightweight resume snapshot restored by framework hooks. Contains
-   * only observed run metadata, errors, and persisted artifact refs. It does
-   * not trigger any generation, but it is **not** inert: it seeds the client's
-   * live resume snapshot, which subsequent run events merge into and which
-   * `getResumeSnapshot()` returns and the client re-persists. Later reads
-   * therefore reflect this seed merged with observed activity, not the original
-   * value verbatim.
+   * Explicit seed for the lightweight resume snapshot, for apps that manage
+   * storage themselves. When set, automatic hydration from `persistence` is
+   * skipped. It does not trigger any generation, but it is **not** inert: it
+   * seeds the client's live resume snapshot, which subsequent run events merge
+   * into and which `getResumeSnapshot()` returns and the client re-persists.
+   * Later reads therefore reflect this seed merged with observed activity, not
+   * the original value verbatim.
    */
   initialResumeSnapshot?: GenerationResumeSnapshot
 
   /**
-   * Optional storage adapter for the lightweight generation resume snapshot.
-   * Accepts any {@link ChatStorageAdapter} — including the shared
+   * Optional client-side storage adapter for the lightweight generation resume
+   * snapshot. Accepts any {@link ChatStorageAdapter} — including the shared
    * `localStoragePersistence` / `sessionStoragePersistence` /
-   * `indexedDBPersistence` factories. Generated media bytes are never written.
+   * `indexedDBPersistence` factories. The client writes the snapshot under the
+   * key `generation:<id>` as a run streams, and reads it back (validated) on
+   * construction unless `initialResumeSnapshot` is provided. Generated media
+   * bytes are never written.
    */
   persistence?: GenerationPersistence
 
@@ -240,26 +249,35 @@ export interface GenerationClientOptions<_TInput, TResult, TOutput = TResult> {
   onErrorChange?: (error: Error | undefined) => void
   /** @internal Called when generation status changes */
   onStatusChange?: (status: GenerationClientState) => void
-  /** @internal Called when lightweight resume snapshot changes */
-  onResumeSnapshotChange?: (snapshot: GenerationResumeSnapshot) => void
+  /** @internal Called when lightweight resume snapshot changes. Receives `undefined` when the snapshot is cleared by `reset()`. */
+  onResumeSnapshotChange?: (snapshot: GenerationResumeSnapshot | undefined) => void
 }
 
+/**
+ * Reduces one observed stream chunk into the lightweight resume snapshot.
+ *
+ * A `RUN_STARTED` chunk begins a fresh run, so stale `result` / `error` /
+ * `pendingArtifacts` from a previous run are dropped rather than carried into
+ * the new run's snapshot.
+ */
 export function updateGenerationResumeSnapshot(
   previous: GenerationResumeSnapshot | null | undefined,
   chunk: StreamChunk,
 ): GenerationResumeSnapshot {
   const threadId = stringField(chunk, 'threadId')
   const runId = stringField(chunk, 'runId')
-  const previousArtifacts = previous?.pendingArtifacts ?? []
+  const carried = chunk.type === 'RUN_STARTED' ? undefined : previous
+  const previousArtifacts = carried?.pendingArtifacts ?? []
   const next: GenerationResumeSnapshot = {
-    resumeState: previous?.resumeState ?? null,
-    status: previous?.status ?? 'idle',
-    ...(previous?.activity ? { activity: previous.activity } : {}),
+    schemaVersion: 1,
+    resumeState: carried?.resumeState ?? null,
+    status: carried?.status ?? 'idle',
+    ...(carried?.activity ? { activity: carried.activity } : {}),
     ...(previousArtifacts.length > 0
       ? { pendingArtifacts: [...previousArtifacts] }
       : {}),
-    ...(previous?.result ? { result: { ...previous.result } } : {}),
-    ...(previous?.error ? { error: { ...previous.error } } : {}),
+    ...(carried?.result ? { result: { ...carried.result } } : {}),
+    ...(carried?.error ? { error: { ...carried.error } } : {}),
     lastEvent: createGenerationEventSnapshot(chunk),
   }
 
@@ -286,6 +304,16 @@ export function updateGenerationResumeSnapshot(
           next.activity = result.artifacts[0]?.source.activity
         }
       }
+    } else if (chunk.name === GENERATION_EVENTS.VIDEO_JOB_CREATED) {
+      // Capture the job id as soon as the job exists — for a long video run
+      // this is the one piece of identity worth having after a reload, and
+      // the terminal `generation:result` may never arrive.
+      const jobId = isObject(chunk.value)
+        ? stringField(chunk.value, 'jobId')
+        : undefined
+      if (jobId) {
+        next.result = { ...next.result, jobId }
+      }
     }
   } else if (chunk.type === 'RUN_FINISHED') {
     next.resumeState = null
@@ -297,6 +325,85 @@ export function updateGenerationResumeSnapshot(
   }
 
   return next
+}
+
+/**
+ * Validates an untrusted value (typically read back from a storage adapter)
+ * into a {@link GenerationResumeSnapshot}, or returns `undefined` when the
+ * value is not a usable snapshot.
+ *
+ * Storage contents are outside the type system — they may be stale, truncated,
+ * hand-edited, or written by a future version. Every field is re-validated
+ * with the same narrowing the live chunk reducer uses. `lastEvent` is not
+ * restored: it describes a transient stream position that has no meaning
+ * after a reload.
+ */
+export function parseGenerationResumeSnapshot(
+  value: unknown,
+): GenerationResumeSnapshot | undefined {
+  if (!isObject(value)) return undefined
+
+  const schemaVersion = Reflect.get(value, 'schemaVersion')
+  if (schemaVersion !== undefined && schemaVersion !== 1) return undefined
+
+  const status = generationResumeStatusField(value, 'status')
+  if (!status) return undefined
+
+  const rawResumeState = Reflect.get(value, 'resumeState')
+  let resumeState: GenerationResumeState | null = null
+  if (rawResumeState !== null && rawResumeState !== undefined) {
+    if (!isObject(rawResumeState)) return undefined
+    const threadId = stringField(rawResumeState, 'threadId')
+    const runId = stringField(rawResumeState, 'runId')
+    if (!threadId || !runId) return undefined
+    resumeState = { threadId, runId }
+  }
+
+  const snapshot: GenerationResumeSnapshot = {
+    schemaVersion: 1,
+    resumeState,
+    status,
+  }
+
+  const activity = persistedArtifactActivityField(value, 'activity')
+  if (activity) snapshot.activity = activity
+
+  const pendingArtifacts = collectArtifactRefs(
+    Reflect.get(value, 'pendingArtifacts'),
+  )
+  if (pendingArtifacts.length > 0) snapshot.pendingArtifacts = pendingArtifacts
+
+  const result = createGenerationResultSnapshot(Reflect.get(value, 'result'))
+  if (result) snapshot.result = result
+
+  const rawError = Reflect.get(value, 'error')
+  if (isObject(rawError)) {
+    const message = stringField(rawError, 'message')
+    if (message) {
+      const code = stringField(rawError, 'code')
+      snapshot.error = { message, ...(code ? { code } : {}) }
+    }
+  }
+
+  return snapshot
+}
+
+function generationResumeStatusField(
+  value: object,
+  key: string,
+): GenerationResumeStatus | undefined {
+  const field = stringField(value, key)
+  if (field === undefined) return undefined
+
+  switch (field) {
+    case 'idle':
+    case 'running':
+    case 'complete':
+    case 'error':
+      return field
+    default:
+      return undefined
+  }
 }
 
 // ===========================
@@ -474,7 +581,8 @@ function createGenerationEventSnapshot(
   }
 }
 
-function createGenerationResultSnapshot(
+/** @internal Narrows an untrusted result payload into the persisted result snapshot shape. */
+export function createGenerationResultSnapshot(
   value: unknown,
 ): GenerationResultSnapshot | undefined {
   if (!isObject(value)) return undefined

@@ -42,7 +42,7 @@ import {
 } from '@tanstack/ai'
 import { openaiImage } from '@tanstack/ai-openai'
 import { withGenerationPersistence } from '@tanstack/ai-persistence'
-import { sqlitePersistence } from '@tanstack/ai-persistence-drizzle/sqlite'
+import { sqlitePersistence } from './sqlite-persistence'
 
 const persistence = sqlitePersistence({
   url: 'file:.tanstack-ai/generation.sqlite',
@@ -81,8 +81,10 @@ export async function GET(request: Request) {
 ```
 
 Use the matching request kind for audio, TTS, video, or transcription.
-`withGenerationPersistence` records runs whenever a `runs` store is present. In
-production, swap `memoryStream` for `durableStream` from
+`./sqlite-persistence` is the hand-rolled adapter from
+[Build your own adapter](./build-your-own-adapter) — any adapter with a `runs`
+store works. `withGenerationPersistence` requires a `runs` store and records
+each run in it. In production, swap `memoryStream` for `durableStream` from
 `@tanstack/ai-durable-stream`, where requests span processes.
 
 Keep run ids unique across chat and generation when they share a backend,

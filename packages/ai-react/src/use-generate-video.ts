@@ -232,7 +232,7 @@ export function useGenerateVideo<TTransformed = void>(
   }, [client, options.body])
 
   // Mount devtools and clean up on unmount. Generation runs are never
-  // auto-started on mount â€” persisted state is read-only for display.
+  // auto-started on mount — persisted state is read-only for display.
   useEffect(() => {
     client.mountDevtools()
 

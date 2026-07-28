@@ -84,8 +84,8 @@ export interface UseGenerateImageReturn<TOutput = ImageGenerationResult> {
  * React hook for generating images using AI models.
  *
  * Supports two transport modes:
- * - **ConnectConnectionAdapter** â€” Streaming transport (SSE, HTTP stream, custom)
- * - **Fetcher** â€” Direct async function call
+ * - **ConnectConnectionAdapter** — Streaming transport (SSE, HTTP stream, custom)
+ * - **Fetcher** — Direct async function call
  *
  * @example
  * ```tsx

@@ -84,8 +84,8 @@ export interface UseGenerateAudioReturn<TOutput = AudioGenerationResult> {
  * React hook for generating audio (music, sound effects) using AI models.
  *
  * Supports two transport modes:
- * - **ConnectConnectionAdapter** â€” Streaming transport (SSE, HTTP stream, custom)
- * - **Fetcher** â€” Direct async function call
+ * - **ConnectConnectionAdapter** — Streaming transport (SSE, HTTP stream, custom)
+ * - **Fetcher** — Direct async function call
  *
  * @example
  * ```tsx

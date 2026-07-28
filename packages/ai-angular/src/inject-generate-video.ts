@@ -203,7 +203,7 @@ export function injectGenerateVideo<TTransformed = void>(
     )
   }
 
-  // Mount devtools only. Generation runs are never auto-started after render â€”
+  // Mount devtools only. Generation runs are never auto-started after render —
   // persisted state is read-only for display.
   afterNextRender(
     () => {
