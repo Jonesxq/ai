@@ -13,8 +13,18 @@ export interface StreamDurability<TOffset extends string = string> {
   /**
    * Persist a batch before it is delivered and return exactly one resumable
    * offset for each chunk, in the same order.
+   *
+   * `opts.offsets` lets a caller supply deterministic offsets instead of having
+   * the adapter assign them, which makes append an **upsert**: re-appending an
+   * already-stored offset must replace it, not duplicate it. A run driver
+   * resuming after a crash re-derives the same offsets from its source position,
+   * so replaying an overlapping range is a no-op. When supplied, the array MUST
+   * be the same length as `chunks`.
    */
-  append: (chunks: Array<StreamChunk>) => Promise<Array<TOffset>>
+  append: (
+    chunks: Array<StreamChunk>,
+    opts?: { offsets?: Array<TOffset> },
+  ) => Promise<Array<TOffset>>
   /** Replay chunks strictly after the supplied adapter-owned offset. */
   read: (
     offset: TOffset,
@@ -233,17 +243,43 @@ export function memoryStream(
 
   return {
     resumeFrom: () => resumeOffset,
-    append: (chunks) => {
+    // `async` so a length-mismatch surfaces as a rejected promise rather than a
+    // synchronous throw at the call site — `append` is declared to return a
+    // Promise, so callers must be able to `.catch()` every failure mode.
+    append: async (chunks, opts) => {
+      const supplied = opts?.offsets
+      if (supplied !== undefined && supplied.length !== chunks.length) {
+        throw new Error(
+          `memoryStream: offsets length ${supplied.length} does not match chunks length ${chunks.length}`,
+        )
+      }
       const log = getOrCreateLog(runId)
       const firstSeq = (log.entries.at(-1)?.seq ?? 0) + 1
       const offsets = chunks.map((chunk, index) => {
+        if (supplied !== undefined) {
+          const offset = supplied[index]
+          if (offset === undefined) {
+            throw new Error(
+              `memoryStream: offsets[${index}] is missing (offsets must be dense and the same length as chunks)`,
+            )
+          }
+          // Upsert: a re-appended offset replaces its entry rather than adding
+          // a second one, so a resumed driver can safely re-send an overlap.
+          const existing = log.entries.find((entry) => entry.offset === offset)
+          if (existing) {
+            existing.chunk = chunk
+          } else {
+            log.entries.push({ seq: firstSeq + index, offset, chunk })
+          }
+          return offset
+        }
         const seq = firstSeq + index
         const offset = encodeMemoryOffset(runId, seq)
         log.entries.push({ seq, offset, chunk })
         return offset
       })
       wakeWaiters(log)
-      return Promise.resolve(offsets)
+      return offsets
     },
     close: () => {
       const log = getOrCreateLog(runId)
