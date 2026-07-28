@@ -160,11 +160,15 @@ internally.
 
 **Reject**, if your store assigns its own cursor on write and can't honor a
 caller's choice. This is what `durableStream` does: its offsets embed a
-backend-assigned cursor, so it throws before creating anything rather than
-silently dropping the caller's intent.
+backend-assigned cursor, so it does not support caller-supplied offsets and
+throws before creating anything rather than silently dropping the caller's
+intent.
 
 ```ts ignore
-append: (chunks, opts) => {
+// async so the rejection is a rejected promise, not a synchronous throw:
+// append is declared to return a Promise, so callers must be able to
+// .catch() every failure mode.
+append: async (chunks, opts) => {
   if (opts?.offsets) {
     throw new Error('this adapter does not support caller-supplied offsets')
   }

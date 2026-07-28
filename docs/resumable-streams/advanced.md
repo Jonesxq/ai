@@ -62,8 +62,9 @@ export async function POST(request: Request) {
   append, and close. A missing header fails loudly. The adapter never guesses an
   offset.
 - `durableStream` rejects a caller-supplied `append(chunks, { offsets })`: its
-  offset embeds a backend-assigned cursor, so it throws before creating
-  anything rather than honoring a caller's choice. See
+  offset embeds a backend-assigned cursor, so it does not support
+  caller-supplied offsets and throws before creating anything rather than
+  honoring a caller's choice. See
   [Custom Durability Adapter](./custom-adapter#handling-caller-supplied-offsets)
   for adapters that can support it.
 
