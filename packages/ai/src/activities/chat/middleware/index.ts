@@ -51,3 +51,15 @@ export {
   defineLock,
 } from './locks'
 export type { LockStore } from './locks'
+
+export {
+  isTerminalRunStatus,
+  defineRunStore,
+  InMemoryRunStore,
+} from './run-store'
+export type {
+  RunStatus,
+  TerminalRunStatus,
+  RunRecord,
+  RunStore,
+} from './run-store'

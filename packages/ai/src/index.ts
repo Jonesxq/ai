@@ -221,6 +221,20 @@ export type {
 // Locks are a distributed-mutex primitive — coordination, not chat state — and
 // live behind their own subpath: `@tanstack/ai/locks` (see ./locks.ts).
 
+// Run lifecycle types — shared by @tanstack/ai-persistence (the `runs` store)
+// and @tanstack/ai-sandbox (the run driver), so one record describes one run.
+export {
+  isTerminalRunStatus,
+  defineRunStore,
+  InMemoryRunStore,
+} from './activities/chat/middleware/index'
+export type {
+  RunStatus,
+  TerminalRunStatus,
+  RunRecord,
+  RunStore,
+} from './activities/chat/middleware/index'
+
 // Well-known AG-UI CUSTOM event catalog (agent activity rides on CUSTOM events)
 export { CUSTOM_EVENT, isCustomEvent } from './custom-events'
 export type {
