@@ -95,8 +95,13 @@ the component mounts:
 ```tsx
 import { localStoragePersistence } from '@tanstack/ai-client'
 import { fetchServerSentEvents, useGenerateImage } from '@tanstack/ai-react'
+import type { GenerationResumeSnapshot } from '@tanstack/ai-react'
 
-const snapshots = localStoragePersistence({ keyPrefix: 'my-app:' })
+// The explicit type argument is only needed for a standalone store like this
+// one; written inline in the hook options, the value type is inferred.
+const snapshots = localStoragePersistence<GenerationResumeSnapshot>({
+  keyPrefix: 'my-app:',
+})
 
 export function HeroImageGenerator() {
   const image = useGenerateImage({

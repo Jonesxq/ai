@@ -1,7 +1,10 @@
 import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useGenerateImage } from '@tanstack/ai-react'
-import type { UseGenerateImageReturn } from '@tanstack/ai-react'
+import type {
+  GenerationResumeSnapshot,
+  UseGenerateImageReturn,
+} from '@tanstack/ai-react'
 import {
   fetchServerSentEvents,
   localStoragePersistence,
@@ -14,7 +17,7 @@ import { generateImageFn, generateImageStreamFn } from '../lib/server-fns'
 // — never the generated image bytes. The client namespaces its record under
 // `generation:<id>`, and reads it back on mount so the last run's outcome
 // survives a full page reload.
-const imageSnapshots = localStoragePersistence({
+const imageSnapshots = localStoragePersistence<GenerationResumeSnapshot>({
   keyPrefix: 'example:',
 })
 
