@@ -670,10 +670,14 @@ export class GenerationClient<
       ...(result?.model !== undefined ? { model: result.model } : {}),
       ...(result?.status !== undefined ? { status: result.status } : {}),
       ...(result?.jobId !== undefined ? { jobId: result.jobId } : {}),
-      ...(result?.expiresAt !== undefined ? { expiresAt: result.expiresAt } : {}),
+      ...(result?.expiresAt !== undefined
+        ? { expiresAt: result.expiresAt }
+        : {}),
       ...(result?.text !== undefined ? { text: result.text } : {}),
       ...(result?.usage !== undefined ? { usage: result.usage } : {}),
-      ...(snapshot.activity !== undefined ? { activity: snapshot.activity } : {}),
+      ...(snapshot.activity !== undefined
+        ? { activity: snapshot.activity }
+        : {}),
       artifacts: result?.artifacts ?? [],
     }
     return build(restored)

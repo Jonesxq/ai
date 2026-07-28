@@ -27,7 +27,9 @@ function mediaUrls(
   return restored.artifacts
     .filter(
       (a) =>
-        a.role === 'output' && a.source.mediaType === mediaType && a.url != null,
+        a.role === 'output' &&
+        a.source.mediaType === mediaType &&
+        a.url != null,
     )
     .map((a) => a.url as string)
 }

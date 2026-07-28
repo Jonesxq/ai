@@ -1362,9 +1362,7 @@ describe('resume snapshot persistence', () => {
       chunks: createReplayVideoChunks(),
     })
 
-    const { result } = renderHook(() =>
-      useGeneration({ connection: adapter }),
-    )
+    const { result } = renderHook(() => useGeneration({ connection: adapter }))
 
     await result.generate({ prompt: 'replay' })
 

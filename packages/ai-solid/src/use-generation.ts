@@ -154,9 +154,10 @@ export function useGeneration<
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<Error | undefined>(undefined)
   const [status, setStatus] = createSignal<GenerationClientState>('idle')
-  const [resumeState, setResumeState] = createSignal<GenerationResumeState | null>(
-    options.initialResumeSnapshot?.resumeState ?? null,
-  )
+  const [resumeState, setResumeState] =
+    createSignal<GenerationResumeState | null>(
+      options.initialResumeSnapshot?.resumeState ?? null,
+    )
   let disposed = false
 
   // Built once. `untrack` keeps the option reads below from subscribing
