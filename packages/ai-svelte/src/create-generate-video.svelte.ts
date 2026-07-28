@@ -248,7 +248,7 @@ export function createGenerateVideo<TTransformed = void>(
     )
   }
 
-  // Mount devtools only. Generation runs are never auto-started on setup â€”
+  // Mount devtools only. Generation runs are never auto-started on setup —
   // persisted state is read-only for display.
   client.mountDevtools()
 

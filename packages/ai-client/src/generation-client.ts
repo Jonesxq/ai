@@ -1,5 +1,7 @@
 import {
   GENERATION_EVENTS,
+  createGenerationResultSnapshot,
+  parseGenerationResumeSnapshot,
   updateGenerationResumeSnapshot,
 } from './generation-types'
 import { createNoOpGenerationDevtoolsBridge } from './devtools-noop'
@@ -39,7 +41,7 @@ interface GenerationCallbacks<TResult, TOutput> {
   onErrorChange?: ((error: Error | undefined) => void) | undefined
   onStatusChange?: ((status: GenerationClientState) => void) | undefined
   onResumeSnapshotChange?:
-    | ((snapshot: GenerationResumeSnapshot) => void)
+    | ((snapshot: GenerationResumeSnapshot | undefined) => void)
     | undefined
 }
 
@@ -89,7 +91,7 @@ export class GenerationClient<
   private readonly devtoolsMetadata: AIDevtoolsClientMetadata
   private readonly devtoolsBridge: GenerationDevtoolsBridge<TOutput>
   private readonly threadId: string
-  private readonly serverPersistence: GenerationPersistence | undefined
+  private readonly resumePersistence: GenerationPersistence | undefined
   private body: Record<string, any>
   private result: TOutput | null = null
   private input: TInput | null = null
@@ -99,6 +101,8 @@ export class GenerationClient<
   private status: GenerationClientState = 'idle'
   private resumeSnapshot: GenerationResumeSnapshot | undefined
   private resumeSnapshotPersistenceQueue: Promise<void> = Promise.resolve()
+  private resumeSnapshotHydration: Promise<void> | undefined
+  private queuedSnapshotSignature: string | undefined
   private resumePersistenceError: Error | undefined = undefined
   private abortController: AbortController | null = null
   private readonly callbacksRef: GenerationCallbacks<TResult, TOutput>
@@ -120,8 +124,9 @@ export class GenerationClient<
     this.connection = options.connection
     this.fetcher = options.fetcher
     this.body = options.body ?? {}
-    this.serverPersistence = options.persistence
+    this.resumePersistence = options.persistence
     this.resumeSnapshot = options.initialResumeSnapshot
+    this.maybeHydrateResumeSnapshot()
 
     this.callbacksRef = {
       onResult: options.onResult,
@@ -159,6 +164,12 @@ export class GenerationClient<
   }
 
   mountDevtools(): void {
+    // Mounting revives a disposed client. Framework hooks call this from
+    // their mount effect, so a dispose → remount cycle (e.g. React
+    // StrictMode's mount → cleanup → mount replay against the same memoized
+    // client) leaves the client usable again.
+    this.disposed = false
+    this.maybeHydrateResumeSnapshot()
     if (this.devtoolsMounted) {
       return
     }
@@ -174,9 +185,9 @@ export class GenerationClient<
    * while already generating will be a no-op.
    */
   async generate(input: TInput): Promise<void> {
-    this.mountDevtools()
     if (this.disposed) return
     if (this.isLoading) return
+    this.mountDevtools()
 
     this.input = input
     this.progress = null
@@ -205,7 +216,7 @@ export class GenerationClient<
           this.devtoolsBridge.ensureRunStarted(runId)
           this.setResult(result)
           this.setStatus('success')
-          this.completePlainFetcherResumeSnapshot()
+          this.completePlainFetcherResumeSnapshot(result)
         }
       } else if (this.connection) {
         // Streaming adapter path
@@ -239,6 +250,7 @@ export class GenerationClient<
       const error = err instanceof Error ? err : new Error(String(err))
       this.setError(error)
       this.setStatus('error')
+      this.recordResumeSnapshotError(error)
       this.devtoolsBridge.finishRun(
         this.devtoolsBridge.getActiveRunId() ?? runId,
         'run:errored',
@@ -333,10 +345,22 @@ export class GenerationClient<
         this.devtoolsBridge.finishRun(runId, 'run:cancelled', 'cancelled')
       }
     }
+    // A stopped run is no longer resumable. Without this, storage keeps a
+    // `running` snapshot forever and a reload would chase a dead run.
+    if (this.resumeSnapshot && this.resumeSnapshot.status === 'running') {
+      this.resumeSnapshot = {
+        ...this.resumeSnapshot,
+        resumeState: null,
+        status: 'idle',
+      }
+      this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
+      void this.persistResumeSnapshot(this.resumeSnapshot)
+    }
   }
 
   /**
-   * Clear the result, error, and return to idle state.
+   * Clear the result, error, and return to idle state. Also clears the
+   * resume snapshot, removing any persisted record for this client id.
    */
   reset(): void {
     this.stop()
@@ -346,6 +370,7 @@ export class GenerationClient<
     this.devtoolsBridge.resetRuns()
     this.setError(undefined)
     this.setStatus('idle')
+    this.clearResumeSnapshot()
     this.devtoolsBridge.emitState()
   }
 
@@ -534,25 +559,127 @@ export class GenerationClient<
     void this.persistResumeSnapshot(this.resumeSnapshot)
   }
 
-  private completePlainFetcherResumeSnapshot(): void {
-    if (!this.resumeSnapshot) {
-      return
-    }
+  /**
+   * The plain (non-Response) fetcher path never observes stream chunks, so
+   * the terminal snapshot is built here from the fetcher's own result. A
+   * stale `error` from a previous run is intentionally dropped — this run
+   * succeeded.
+   */
+  private completePlainFetcherResumeSnapshot(rawResult: unknown): void {
+    const previous = this.resumeSnapshot
+    const result = createGenerationResultSnapshot(rawResult)
     this.resumeSnapshot = {
-      ...this.resumeSnapshot,
+      schemaVersion: 1,
       resumeState: null,
       status: 'complete',
+      ...(previous?.activity ? { activity: previous.activity } : {}),
+      ...(previous?.pendingArtifacts && previous.pendingArtifacts.length > 0
+        ? { pendingArtifacts: [...previous.pendingArtifacts] }
+        : {}),
+      ...(result
+        ? { result }
+        : previous?.result
+          ? { result: { ...previous.result } }
+          : {}),
     }
     this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
     void this.persistResumeSnapshot(this.resumeSnapshot)
   }
 
+  /**
+   * Records a transport-level failure (network drop, throwing callback) in
+   * the snapshot. Without this, only a server-emitted RUN_ERROR chunk would
+   * mark the snapshot `error`, leaving a persisted record that claims the
+   * run is still in flight.
+   */
+  private recordResumeSnapshotError(error: Error): void {
+    if (this.resumeSnapshot?.status === 'error') return
+    if (!this.resumeSnapshot && !this.resumePersistence) return
+    const previous = this.resumeSnapshot
+    this.resumeSnapshot = {
+      schemaVersion: 1,
+      resumeState: null,
+      status: 'error',
+      ...(previous?.activity ? { activity: previous.activity } : {}),
+      ...(previous?.pendingArtifacts && previous.pendingArtifacts.length > 0
+        ? { pendingArtifacts: [...previous.pendingArtifacts] }
+        : {}),
+      ...(previous?.result ? { result: { ...previous.result } } : {}),
+      error: { message: error.message },
+    }
+    this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
+    void this.persistResumeSnapshot(this.resumeSnapshot)
+  }
+
+  private clearResumeSnapshot(): void {
+    this.resumeSnapshot = undefined
+    this.queuedSnapshotSignature = undefined
+    this.callbacksRef.onResumeSnapshotChange?.(undefined)
+    if (!this.resumePersistence) {
+      return
+    }
+    this.resumeSnapshotPersistenceQueue =
+      this.resumeSnapshotPersistenceQueue.then(
+        () => this.removePersistedResumeSnapshot(),
+        () => this.removePersistedResumeSnapshot(),
+      )
+  }
+
+  /**
+   * Storage key for this client's snapshot. The `generation:` segment keeps
+   * a generation client and a chat client that share an id (and a storage
+   * adapter with the default key prefix) from overwriting each other.
+   */
+  private get resumeSnapshotKey(): string {
+    return `generation:${this.uniqueId}`
+  }
+
+  private maybeHydrateResumeSnapshot(): void {
+    if (!this.resumePersistence || this.resumeSnapshotHydration) return
+    // An explicit `initialResumeSnapshot` seed takes precedence over storage.
+    if (this.resumeSnapshot) return
+    this.resumeSnapshotHydration = this.hydrateResumeSnapshot()
+  }
+
+  private async hydrateResumeSnapshot(): Promise<void> {
+    let stored: unknown
+    try {
+      stored = await this.resumePersistence?.getItem(this.resumeSnapshotKey)
+    } catch (error) {
+      // A corrupt record (e.g. truncated JSON) or unavailable storage must
+      // not break construction; the app just starts without a snapshot.
+      console.warn(
+        '[TanStack AI] Failed to read persisted generation resume snapshot',
+        error,
+      )
+      return
+    }
+    if (stored === null || stored === undefined) return
+    const snapshot = parseGenerationResumeSnapshot(stored)
+    if (!snapshot) return
+    // Live state wins: adopt the stored snapshot only if nothing has been
+    // observed since construction.
+    if (this.resumeSnapshot || this.isLoading || this.status !== 'idle') return
+    this.resumeSnapshot = snapshot
+    this.callbacksRef.onResumeSnapshotChange?.(snapshot)
+  }
+
   private async persistResumeSnapshot(
     snapshot: GenerationResumeSnapshot,
   ): Promise<void> {
-    if (!this.serverPersistence) {
+    if (!this.resumePersistence) {
       return
     }
+
+    // Skip writes that only differ in `lastEvent` — for a long streaming run
+    // this collapses hundreds of per-chunk writes into the handful where the
+    // snapshot materially changed. (`lastEvent` in storage is best-effort;
+    // hydration drops it anyway.)
+    const signature = resumeSnapshotSignature(snapshot)
+    if (signature === this.queuedSnapshotSignature) {
+      return
+    }
+    this.queuedSnapshotSignature = signature
 
     this.resumeSnapshotPersistenceQueue =
       this.resumeSnapshotPersistenceQueue.then(
@@ -566,16 +693,48 @@ export class GenerationClient<
     snapshot: GenerationResumeSnapshot,
   ): Promise<void> {
     try {
-      await this.serverPersistence?.setItem(this.threadId, snapshot)
+      await this.resumePersistence?.setItem(this.resumeSnapshotKey, snapshot)
+      this.resumePersistenceError = undefined
     } catch (error) {
+      // Warn only on the transition into failure, not once per write.
+      if (!this.resumePersistenceError) {
+        console.warn(
+          '[TanStack AI] Failed to persist generation resume snapshot',
+          error,
+        )
+      }
       this.resumePersistenceError =
         error instanceof Error ? error : new Error(String(error))
-      console.warn(
-        '[TanStack AI] Failed to persist generation resume snapshot',
-        error,
-      )
+      // Allow the next snapshot change to retry even if it is materially
+      // identical to this failed write.
+      this.queuedSnapshotSignature = undefined
     }
   }
+
+  private async removePersistedResumeSnapshot(): Promise<void> {
+    try {
+      await this.resumePersistence?.removeItem(this.resumeSnapshotKey)
+      this.resumePersistenceError = undefined
+    } catch (error) {
+      if (!this.resumePersistenceError) {
+        console.warn(
+          '[TanStack AI] Failed to remove persisted generation resume snapshot',
+          error,
+        )
+      }
+      this.resumePersistenceError =
+        error instanceof Error ? error : new Error(String(error))
+    }
+  }
+}
+
+/**
+ * Stable serialization of the snapshot minus `lastEvent`, used to detect
+ * material changes between persistence writes.
+ */
+function resumeSnapshotSignature(snapshot: GenerationResumeSnapshot): string {
+  const { lastEvent: _lastEvent, ...significant } = snapshot
+  return JSON.stringify(significant)
 }
 
 function completeProgressValue(

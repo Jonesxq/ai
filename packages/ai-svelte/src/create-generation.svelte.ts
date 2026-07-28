@@ -124,7 +124,7 @@ export interface CreateGenerationReturn<TOutput> {
 // inference site that works even for an optional nested property), which types
 // the callback parameter as `TResult` and narrows `result`. Inferring the
 // whole callback as a defaulted type parameter instead collapses to the
-// default, leaving the parameter `any` â€” a hard error under `strict`. See
+// default, leaving the parameter `any` — a hard error under `strict`. See
 // issue #848.
 export function createGeneration<
   TInput extends Record<string, any>,
@@ -161,7 +161,7 @@ export function createGeneration<
   // `body` uses a conditional spread because `GenerationClientOptions.body`
   // is declared `body?: Record<string, any>` (absent vs. present) under
   // `exactOptionalPropertyTypes`. Assigning `undefined` directly would be
-  // rejected â€” the optional caller `options.body` may be undefined, in which
+  // rejected — the optional caller `options.body` may be undefined, in which
   // case we want the key to be absent.
   const clientOptions: GenerationClientOptions<TInput, TResult, TOutput> = {
     id: clientId,
@@ -230,7 +230,7 @@ export function createGeneration<
     )
   }
 
-  // Mount devtools only. Generation runs are never auto-started on setup â€”
+  // Mount devtools only. Generation runs are never auto-started on setup —
   // persisted state is read-only for display.
   client.mountDevtools()
 

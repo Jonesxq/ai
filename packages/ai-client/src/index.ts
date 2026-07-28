@@ -94,6 +94,7 @@ export type {
 } from './generation-types'
 export {
   GENERATION_EVENTS,
+  parseGenerationResumeSnapshot,
   updateGenerationResumeSnapshot,
 } from './generation-types'
 export { UnsupportedResponseStreamError } from './response-stream'
