@@ -85,7 +85,9 @@ CREATE TABLE IF NOT EXISTS runs (
   finished_at integer,
   error text,
   usage_json text,
-  detached_since integer
+  sandbox_key text,
+  detached_since integer,
+  cancel_requested integer
 );
 CREATE TABLE IF NOT EXISTS interrupts (
   interrupt_id text PRIMARY KEY NOT NULL,
@@ -186,8 +188,16 @@ function mapRun(row: Record<string, unknown>): RunRecord {
     ...(typeof row.usage_json === 'string'
       ? { usage: JSON.parse(row.usage_json) }
       : {}),
+    ...(typeof row.sandbox_key === 'string'
+      ? { sandboxKey: row.sandbox_key }
+      : {}),
     ...(row.detached_since != null
       ? { detachedSince: Number(row.detached_since) }
+      : {}),
+    // SQLite has no boolean column type; store it as 0/1 in an integer column
+    // and convert back here, the same way `detached_since` round-trips epoch ms.
+    ...(row.cancel_requested != null
+      ? { cancelRequested: Boolean(row.cancel_requested) }
       : {}),
   }
 }
@@ -241,9 +251,17 @@ function createRunStore(db: DatabaseSync) {
         sets.push('usage_json = ?')
         params.push(JSON.stringify(patch.usage))
       }
+      if (patch.sandboxKey !== undefined) {
+        sets.push('sandbox_key = ?')
+        params.push(patch.sandboxKey)
+      }
       if (patch.detachedSince !== undefined) {
         sets.push('detached_since = ?')
         params.push(patch.detachedSince)
+      }
+      if (patch.cancelRequested !== undefined) {
+        sets.push('cancel_requested = ?')
+        params.push(patch.cancelRequested ? 1 : 0)
       }
       if (sets.length === 0) return
       params.push(runId)

@@ -102,9 +102,12 @@ them to trade extra writes for partial-output durability. Tune the interval
 with `snapshotIntervalMs` (default `1000`).
 
 On **error**, the run is marked `failed`. On **abort**, the run is marked
-`interrupted`. Resumes accepted in `onConfig` are **not** consumed until a
-success boundary (interrupt or finish), so a failed run leaves pending
-interrupts retryable with the same resume batch.
+`interrupted`, because the turn is resumable from the transcript and interrupts
+already stored for it: this is a mid-stream cancellation, not the `aborted`
+status a sandbox run driver writes for an explicit out-of-band cancel. Resumes
+accepted in `onConfig` are **not** consumed until a success boundary (interrupt
+or finish), so a failed run leaves pending interrupts retryable with the same
+resume batch.
 
 ## Interrupts survive a restart
 
