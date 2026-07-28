@@ -126,7 +126,6 @@ export class GenerationClient<
     this.body = options.body ?? {}
     this.resumePersistence = options.persistence
     this.resumeSnapshot = options.initialResumeSnapshot
-    this.maybeHydrateResumeSnapshot()
 
     this.callbacksRef = {
       onResult: options.onResult,
@@ -144,6 +143,10 @@ export class GenerationClient<
     this.devtoolsBridge = (
       options.devtoolsBridgeFactory ?? createNoOpGenerationDevtoolsBridge
     )<TOutput>(this.buildDevtoolsBridgeOptions())
+
+    // After callbacksRef is assigned: hydration may fire
+    // onResumeSnapshotChange synchronously if an adapter resolves sync.
+    this.maybeHydrateResumeSnapshot()
   }
 
   private buildDevtoolsBridgeOptions(): GenerationDevtoolsBridgeOptions<TOutput> {

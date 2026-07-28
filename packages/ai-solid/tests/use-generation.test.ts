@@ -1159,6 +1159,8 @@ describe('useGenerateVideo', () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
 
       expect(connect).not.toHaveBeenCalled()
+      // An explicit `initialResumeSnapshot` seed wins over storage, so the
+      // client skips hydration entirely here.
       expect(persistence.getItem).not.toHaveBeenCalled()
       expect(result.isLoading()).toBe(false)
       expect(result.status()).toBe('idle')
@@ -1179,6 +1181,124 @@ describe('useGenerateVideo', () => {
         'useGenerateVideo requires either a connection or fetcher option',
       )
     })
+  })
+})
+
+describe('resume snapshot persistence', () => {
+  // Map-backed stand-in for a real storage adapter, so a test can both assert
+  // on the calls and read back what actually landed in storage.
+  function createMapPersistence(
+    seed: Array<[string, GenerationResumeSnapshot]> = [],
+  ): {
+    persistence: GenerationPersistence
+    store: Map<string, GenerationResumeSnapshot>
+  } {
+    const store = new Map<string, GenerationResumeSnapshot>(seed)
+    return {
+      store,
+      persistence: {
+        getItem: vi.fn((key: string) => store.get(key) ?? null),
+        setItem: vi.fn((key: string, value: GenerationResumeSnapshot) => {
+          store.set(key, value)
+        }),
+        removeItem: vi.fn((key: string) => {
+          store.delete(key)
+        }),
+      },
+    }
+  }
+
+  // Hydration and the persistence write queue are async; give both a turn.
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  it('hydrates a persisted snapshot into resumeSnapshot after mount', async () => {
+    const stored: GenerationResumeSnapshot = {
+      schemaVersion: 1,
+      resumeState: { threadId: 'thread-stored', runId: 'run-stored' },
+      status: 'running',
+    }
+    const { persistence } = createMapPersistence([
+      ['generation:hydrate-me', stored],
+    ])
+    const adapter = createMockConnectionAdapter()
+
+    const { result } = renderHook(() =>
+      useGeneration({
+        id: 'hydrate-me',
+        connection: adapter,
+        persistence,
+      }),
+    )
+
+    expect(result.resumeSnapshot()).toBeUndefined()
+
+    await flush()
+
+    expect(persistence.getItem).toHaveBeenCalledTimes(1)
+    expect(persistence.getItem).toHaveBeenCalledWith('generation:hydrate-me')
+    expect(result.resumeSnapshot()).toEqual(stored)
+    expect(result.resumeState()).toEqual(stored.resumeState)
+    // Hydrating is display-only — it never starts a run.
+    expect(result.status()).toBe('idle')
+    expect(result.isLoading()).toBe(false)
+  })
+
+  it('hydrates a persisted snapshot for useGenerateVideo', async () => {
+    const stored: GenerationResumeSnapshot = {
+      schemaVersion: 1,
+      resumeState: { threadId: 'thread-stored', runId: 'run-stored' },
+      status: 'running',
+    }
+    const { persistence } = createMapPersistence([
+      ['generation:video-hydrate-me', stored],
+    ])
+    const adapter = createMockConnectionAdapter()
+
+    const { result } = renderHook(() =>
+      useGenerateVideo({
+        id: 'video-hydrate-me',
+        connection: adapter,
+        persistence,
+      }),
+    )
+
+    await flush()
+
+    expect(persistence.getItem).toHaveBeenCalledWith(
+      'generation:video-hydrate-me',
+    )
+    expect(result.resumeSnapshot()).toEqual(stored)
+    expect(result.status()).toBe('idle')
+  })
+
+  it('clears resumeSnapshot and removes the persisted record on reset', async () => {
+    const { persistence, store } = createMapPersistence()
+
+    const { result } = renderHook(() =>
+      useGeneration({
+        id: 'reset-me',
+        fetcher: async () => ({ id: '1' }),
+        persistence,
+      }),
+    )
+
+    await result.generate({ prompt: 'test' })
+    await flush()
+
+    expect(persistence.setItem).toHaveBeenCalledWith(
+      'generation:reset-me',
+      expect.objectContaining({ status: 'complete' }),
+    )
+    expect(result.resumeSnapshot()?.status).toBe('complete')
+
+    result.reset()
+
+    expect(result.resumeSnapshot()).toBeUndefined()
+
+    await flush()
+
+    expect(persistence.removeItem).toHaveBeenCalledWith('generation:reset-me')
+    expect(store.has('generation:reset-me')).toBe(false)
   })
 })
 

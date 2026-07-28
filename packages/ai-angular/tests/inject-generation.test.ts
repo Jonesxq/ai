@@ -10,6 +10,7 @@ import { injectGenerateVideo } from '../src/inject-generate-video'
 import type { StreamChunk } from '@tanstack/ai'
 import type {
   ConnectConnectionAdapter,
+  GenerationPersistence,
   GenerationResumeSnapshot,
   RunAgentInputContext,
 } from '@tanstack/ai-client'
@@ -67,6 +68,44 @@ const videoResumeSnapshot: GenerationResumeSnapshot = {
     runId: 'run-resume',
   },
   status: 'running',
+}
+
+/**
+ * Storage adapter backed by a Map, so a test can seed a persisted record and
+ * then assert on what the client read, wrote, and removed.
+ */
+function createMapPersistence(seed?: Record<string, GenerationResumeSnapshot>): {
+  persistence: GenerationPersistence
+  store: Map<string, GenerationResumeSnapshot>
+  getItem: ReturnType<typeof vi.fn>
+  setItem: ReturnType<typeof vi.fn>
+  removeItem: ReturnType<typeof vi.fn>
+} {
+  const store = new Map<string, GenerationResumeSnapshot>(
+    Object.entries(seed ?? {}),
+  )
+  const getItem = vi.fn((key: string) => store.get(key) ?? null)
+  const setItem = vi.fn((key: string, value: GenerationResumeSnapshot) => {
+    store.set(key, value)
+  })
+  const removeItem = vi.fn((key: string) => {
+    store.delete(key)
+  })
+  return {
+    persistence: { getItem, setItem, removeItem },
+    store,
+    getItem,
+    setItem,
+    removeItem,
+  }
+}
+
+// Hydration and snapshot removal both run through awaited promise chains, so
+// drain the microtask queue rather than awaiting a single tick.
+async function flushPromises(): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    await Promise.resolve()
+  }
 }
 
 function createRunContextCaptureAdapter(chunks: Array<StreamChunk>): {
@@ -144,6 +183,66 @@ describe('injectGeneration', () => {
     // The persisted snapshot remains exposed as read-only state.
     expect(result.resumeState()).toEqual(snapshot.resumeState)
   })
+
+  it('hydrates a persisted snapshot from storage on construction', async () => {
+    const { adapter, connect } = createRunContextCaptureAdapter([])
+    const { persistence, getItem } = createMapPersistence({
+      'generation:hydrate-me': {
+        resumeState: { threadId: 'thread-stored', runId: 'run-stored' },
+        status: 'running',
+      },
+    })
+    const { result } = renderInjectGeneration({
+      id: 'hydrate-me',
+      connection: adapter,
+      persistence,
+    })
+
+    await flushPromises()
+
+    expect(getItem).toHaveBeenCalledTimes(1)
+    expect(getItem).toHaveBeenCalledWith('generation:hydrate-me')
+    // Hydration only surfaces state; it never restarts the run.
+    expect(connect).not.toHaveBeenCalled()
+    expect(result.resumeSnapshot()).toEqual({
+      schemaVersion: 1,
+      resumeState: { threadId: 'thread-stored', runId: 'run-stored' },
+      status: 'running',
+    })
+    expect(result.resumeState()).toEqual({
+      threadId: 'thread-stored',
+      runId: 'run-stored',
+    })
+  })
+
+  it('clears the snapshot and removes the persisted record on reset', async () => {
+    const snapshot: GenerationResumeSnapshot = {
+      resumeState: { threadId: 'thread-reset', runId: 'run-reset' },
+      status: 'running',
+    }
+    const { adapter } = createRunContextCaptureAdapter([])
+    const { persistence, removeItem, store } = createMapPersistence({
+      'generation:reset-me': snapshot,
+    })
+    const { result } = renderInjectGeneration({
+      id: 'reset-me',
+      connection: adapter,
+      persistence,
+      initialResumeSnapshot: snapshot,
+    })
+
+    expect(result.resumeSnapshot()).toEqual(snapshot)
+
+    result.reset()
+    await flushPromises()
+
+    expect(result.resumeSnapshot()).toBeUndefined()
+    expect(result.resumeState()).toBeNull()
+    expect(result.pendingArtifacts()).toEqual([])
+    expect(result.resultArtifacts()).toEqual([])
+    expect(removeItem).toHaveBeenCalledWith('generation:reset-me')
+    expect(store.has('generation:reset-me')).toBe(false)
+  })
 })
 
 describe('injectGenerateVideo', () => {
@@ -167,5 +266,35 @@ describe('injectGenerateVideo', () => {
     // The persisted snapshot remains exposed as read-only state.
     expect(result.resumeSnapshot()).toEqual(videoResumeSnapshot)
     expect(result.resumeState()).toEqual(videoResumeSnapshot.resumeState)
+  })
+
+  it('hydrates from storage and clears the persisted record on reset', async () => {
+    const { adapter, connect } = createRunContextCaptureAdapter([])
+    const { persistence, getItem, removeItem, store } = createMapPersistence({
+      'generation:video-hydrate': videoResumeSnapshot,
+    })
+    const { result } = renderInjectGenerateVideo({
+      id: 'video-hydrate',
+      connection: adapter,
+      persistence,
+    })
+
+    await flushPromises()
+
+    expect(getItem).toHaveBeenCalledTimes(1)
+    expect(getItem).toHaveBeenCalledWith('generation:video-hydrate')
+    expect(connect).not.toHaveBeenCalled()
+    expect(result.resumeSnapshot()).toEqual({
+      schemaVersion: 1,
+      ...videoResumeSnapshot,
+    })
+
+    result.reset()
+    await flushPromises()
+
+    expect(result.resumeSnapshot()).toBeUndefined()
+    expect(result.resumeState()).toBeNull()
+    expect(removeItem).toHaveBeenCalledWith('generation:video-hydrate')
+    expect(store.has('generation:video-hydrate')).toBe(false)
   })
 })

@@ -12,6 +12,7 @@ import { createMockConnectionAdapter } from './test-utils'
 import type { StreamChunk, TTSResult, TranscriptionResult } from '@tanstack/ai'
 import type {
   ConnectConnectionAdapter,
+  GenerationPersistence,
   GenerationResumeSnapshot,
   RunAgentInputContext,
 } from '@tanstack/ai-client'
@@ -119,6 +120,25 @@ function createRunContextCaptureAdapter(chunks: Array<StreamChunk>): {
     },
   }
   return { adapter, connect, runContexts }
+}
+
+/** Map-backed storage adapter standing in for localStorage/IndexedDB. */
+function createMapPersistence(
+  seed?: Record<string, GenerationResumeSnapshot>,
+): GenerationPersistence & { store: Map<string, GenerationResumeSnapshot> } {
+  const store = new Map<string, GenerationResumeSnapshot>(
+    Object.entries(seed ?? {}),
+  )
+  return {
+    store,
+    getItem: vi.fn((key: string) => store.get(key) ?? null),
+    setItem: vi.fn((key: string, value: GenerationResumeSnapshot) => {
+      store.set(key, value)
+    }),
+    removeItem: vi.fn((key: string) => {
+      store.delete(key)
+    }),
+  }
 }
 
 // Helper to create error stream chunks
@@ -331,6 +351,77 @@ describe('useGeneration', () => {
       expect(result.result.value).toBeNull()
       expect(result.error.value).toBeUndefined()
       expect(result.status.value).toBe('idle')
+    })
+  })
+
+  describe('resume snapshot persistence', () => {
+    it('hydrates a persisted snapshot into resumeSnapshot on mount', async () => {
+      const stored: GenerationResumeSnapshot = {
+        schemaVersion: 1,
+        resumeState: { threadId: 'thread-stored', runId: 'run-stored' },
+        status: 'running',
+      }
+      const persistence = createMapPersistence({
+        'generation:hydrate-me': stored,
+      })
+
+      const { result } = renderHook(() =>
+        useGeneration({
+          id: 'hydrate-me',
+          fetcher: async () => ({ id: '1' }),
+          persistence,
+        }),
+      )
+
+      // Hydration is async: it starts at construction and resolves before the
+      // first flush, so the snapshot is only visible after awaiting.
+      expect(result.resumeSnapshot.value).toBeUndefined()
+      await flushPromises()
+      await nextTick()
+
+      expect(persistence.getItem).toHaveBeenCalledTimes(1)
+      expect(persistence.getItem).toHaveBeenCalledWith('generation:hydrate-me')
+      expect(result.resumeSnapshot.value).toEqual(stored)
+      expect(result.resumeState.value).toEqual(stored.resumeState)
+      // Hydration alone must not start a run.
+      expect(result.isLoading.value).toBe(false)
+      expect(result.status.value).toBe('idle')
+    })
+
+    it('clears resumeSnapshot and removes the persisted record on reset', async () => {
+      const persistence = createMapPersistence()
+
+      const { result } = renderHook(() =>
+        useGeneration({
+          id: 'reset-me',
+          connection: createMockConnectionAdapter({
+            chunks: createGenerationChunks({ id: '1' }),
+          }),
+          persistence,
+        }),
+      )
+
+      await result.generate({ prompt: 'test' })
+      await flushPromises()
+      await nextTick()
+
+      expect(result.resumeSnapshot.value).toBeDefined()
+      expect(persistence.setItem).toHaveBeenCalledWith(
+        'generation:reset-me',
+        expect.objectContaining({ status: 'complete' }),
+      )
+      expect(persistence.store.get('generation:reset-me')).toBeDefined()
+
+      result.reset()
+      await flushPromises()
+      await nextTick()
+
+      expect(result.resumeSnapshot.value).toBeUndefined()
+      expect(result.resumeState.value).toBeNull()
+      expect(result.pendingArtifacts.value).toEqual([])
+      expect(result.resultArtifacts.value).toEqual([])
+      expect(persistence.removeItem).toHaveBeenCalledWith('generation:reset-me')
+      expect(persistence.store.has('generation:reset-me')).toBe(false)
     })
   })
 

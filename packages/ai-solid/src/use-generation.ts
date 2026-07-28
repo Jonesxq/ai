@@ -2,11 +2,11 @@ import { GenerationClient } from '@tanstack/ai-client'
 import { createGenerationDevtoolsBridge } from '@tanstack/ai-client/devtools'
 import {
   createEffect,
-  createMemo,
   createSignal,
   createUniqueId,
   onCleanup,
   onMount,
+  untrack,
 } from 'solid-js'
 import type { StreamChunk } from '@tanstack/ai'
 import type {
@@ -44,9 +44,9 @@ export interface UseGenerationOptions<TInput, TResult, TOutput = TResult> {
   body?: Record<string, any>
   /** Display options for TanStack AI Devtools. */
   devtools?: AIDevtoolsDisplayOptions
-  /** Server-side lightweight generation state persistence. */
+  /** Client-side storage adapter for the lightweight resume snapshot. Written under `generation:<id>` as a run streams and read back on mount. Media bytes are never stored. */
   persistence?: GenerationPersistence
-  /** Initial lightweight resume snapshot restored by the app (read-only state). */
+  /** Explicit resume-snapshot seed for apps that manage storage themselves; skips automatic hydration from `persistence`. Later run events merge into it. */
   initialResumeSnapshot?: GenerationResumeSnapshot
   /**
    * Callback when a result is received. Can optionally return a transformed value.
@@ -86,11 +86,11 @@ export interface UseGenerationReturn<TOutput> {
   reset: () => void
   /** Lightweight generation resume snapshot, if one is available */
   resumeSnapshot: Accessor<GenerationResumeSnapshot | undefined>
-  /** Observed run/cursor metadata from the snapshot (read-only state) */
+  /** Identity of the in-flight run while one is streaming, or null after it ends */
   resumeState: Accessor<GenerationResumeState | null>
-  /** Pending persisted artifact references observed during generation/replay */
+  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
   pendingArtifacts: Accessor<Array<GenerationPendingArtifact>>
-  /** Final persisted artifact references observed from a replayed result */
+  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
   resultArtifacts: Accessor<Array<PersistedArtifactRef>>
 }
 
@@ -142,7 +142,12 @@ export function useGeneration<
   >(options.initialResumeSnapshot)
   let disposed = false
 
-  const client = createMemo(() => {
+  // Built once. `untrack` keeps the option reads below from subscribing
+  // construction to `options.persistence` / `options.initialResumeSnapshot` /
+  // `options.devtools` / `options.body`: a re-run would build a second client
+  // and orphan the first (only the live one is disposed on cleanup). Later
+  // `options.body` changes are pushed through `updateOptions` instead.
+  const client = untrack((): GenerationClient<TInput, TResult, TOutput> => {
     // Conditional spread on `body`: `GenerationClientOptions.body` is a
     // strict optional (`body?: Record<string, any>`) and EOPT forbids
     // assigning the source `T | undefined` directly.
@@ -210,38 +215,38 @@ export function useGeneration<
     throw new Error(
       'useGeneration requires either a connection or fetcher option',
     )
-  }, [clientId])
+  })
 
   // Sync body changes without recreating client
   createEffect(() => {
     const currentBody = options.body
-    client().updateOptions({
+    client.updateOptions({
       ...(currentBody !== undefined && { body: currentBody }),
     })
   })
 
-  // Mount devtools only. Generation runs are never auto-started on mount —
-  // persisted state is read-only for display.
+  // Mount devtools only. Generation runs are never auto-started on mount — a
+  // persisted snapshot is hydrated for display, never replayed.
   onMount(() => {
-    client().mountDevtools()
+    client.mountDevtools()
   })
 
   // Cleanup on unmount: stop any in-flight requests and unregister devtools
   onCleanup(() => {
     disposed = true
-    client().dispose()
+    client.dispose()
   })
 
   const generate = async (input: TInput) => {
-    await client().generate(input)
+    await client.generate(input)
   }
 
   const stop = () => {
-    client().stop()
+    client.stop()
   }
 
   const reset = () => {
-    client().reset()
+    client.reset()
   }
 
   return {
@@ -254,7 +259,16 @@ export function useGeneration<
     reset,
     resumeSnapshot,
     resumeState: () => resumeSnapshot()?.resumeState ?? null,
-    pendingArtifacts: () => resumeSnapshot()?.pendingArtifacts ?? [],
-    resultArtifacts: () => resumeSnapshot()?.result?.artifacts ?? [],
+    pendingArtifacts: () =>
+      resumeSnapshot()?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS,
+    resultArtifacts: () =>
+      resumeSnapshot()?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS,
   }
 }
+
+// Stable fallbacks so the accessors keep returning the same array identity
+// while no snapshot exists. (A `createMemo` would buy nothing on top of this:
+// a populated array's identity already comes from the snapshot object, and
+// memos are one-shot under Solid's SSR build.)
+const EMPTY_PENDING_ARTIFACTS: Array<GenerationPendingArtifact> = []
+const EMPTY_RESULT_ARTIFACTS: Array<PersistedArtifactRef> = []

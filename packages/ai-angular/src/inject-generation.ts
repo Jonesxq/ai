@@ -40,9 +40,9 @@ export interface InjectGenerationOptions<TInput, TResult, TOutput = TResult> {
   body?: ReactiveOption<Record<string, any>>
   /** Display options for TanStack AI Devtools. */
   devtools?: AIDevtoolsDisplayOptions
-  /** Server-side lightweight generation state persistence. */
+  /** Client-side storage adapter for the lightweight resume snapshot. Written under `generation:<id>` as a run streams and read back on mount. Media bytes are never stored. */
   persistence?: GenerationPersistence
-  /** Initial lightweight resume snapshot restored by the app (read-only state). */
+  /** Explicit resume-snapshot seed for apps that manage storage themselves; skips automatic hydration from `persistence`. Later run events merge into it. */
   initialResumeSnapshot?: GenerationResumeSnapshot
   /**
    * Callback when a result is received. Can optionally return a transformed value.
@@ -77,11 +77,11 @@ export interface InjectGenerationResult<TOutput> {
   reset: () => void
   /** Lightweight generation resume snapshot, if one is available */
   resumeSnapshot: Signal<GenerationResumeSnapshot | undefined>
-  /** Observed run/cursor metadata from the snapshot (read-only state) */
+  /** Identity of the in-flight run while one is streaming, or null after it ends */
   resumeState: Signal<GenerationResumeState | null>
-  /** Pending persisted artifact references observed during generation/replay */
+  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
   pendingArtifacts: Signal<Array<GenerationPendingArtifact>>
-  /** Final persisted artifact references observed from a replayed result */
+  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
   resultArtifacts: Signal<Array<PersistedArtifactRef>>
 }
 

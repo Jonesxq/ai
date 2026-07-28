@@ -35,9 +35,9 @@ export interface CreateGenerationOptions<TInput, TResult, TOutput = TResult> {
   body?: Record<string, any>
   /** Display options for TanStack AI Devtools. */
   devtools?: AIDevtoolsDisplayOptions
-  /** Server-side lightweight generation state persistence. */
+  /** Client-side storage adapter for the lightweight resume snapshot. Written under `generation:<id>` as a run streams and read back on mount. Media bytes are never stored. */
   persistence?: GenerationPersistence
-  /** Initial lightweight resume snapshot restored by the app (read-only state). */
+  /** Explicit resume-snapshot seed for apps that manage storage themselves; skips automatic hydration from `persistence`. Later run events merge into it. */
   initialResumeSnapshot?: GenerationResumeSnapshot
   /**
    * Callback when a result is received. Can optionally return a transformed value.
@@ -81,11 +81,11 @@ export interface CreateGenerationReturn<TOutput> {
   updateBody: (body: Record<string, any>) => void
   /** Lightweight generation resume snapshot, if one is available */
   readonly resumeSnapshot: GenerationResumeSnapshot | undefined
-  /** Observed run/cursor metadata from the snapshot (read-only state) */
+  /** Identity of the in-flight run while one is streaming, or null after it ends */
   readonly resumeState: GenerationResumeState | null
-  /** Pending persisted artifact references observed during generation/replay */
+  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
   readonly pendingArtifacts: Array<GenerationPendingArtifact>
-  /** Final persisted artifact references observed from a replayed result */
+  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
   readonly resultArtifacts: Array<PersistedArtifactRef>
 }
 
@@ -240,6 +240,12 @@ export function createGeneration<
   // Users should call gen.dispose() in their component's cleanup if needed.
 
   const generate = async (input: TInput) => {
+    // Svelte has no remount effect to revive a disposed client (the other
+    // frameworks revive via mountDevtools() in their mount effects), so an
+    // explicit generate() after dispose() is the Svelte revive path: bring
+    // the client and the reactive bindings back together.
+    disposed = false
+    client.mountDevtools()
     await client.generate(input)
   }
 
