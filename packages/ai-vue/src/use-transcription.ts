@@ -128,10 +128,5 @@ export function useTranscription<TTransformed = void>(
     TTransformed
   >({ ...options, devtools })
 
-  return {
-    ...generation,
-    generate: generation.generate as (
-      input: TranscriptionGenerateInput,
-    ) => Promise<void>,
-  }
+  return generation
 }

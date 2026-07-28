@@ -117,10 +117,5 @@ export function useGenerateAudio<TTransformed = void>(
     devtools,
   })
 
-  return {
-    ...generation,
-    generate: generation.generate as (
-      input: AudioGenerateInput,
-    ) => Promise<void>,
-  }
+  return generation
 }

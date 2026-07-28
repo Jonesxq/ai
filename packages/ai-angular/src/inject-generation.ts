@@ -60,9 +60,18 @@ export interface InjectGenerationOptions<TInput, TResult, TOutput = TResult> {
   onChunk?: (chunk: StreamChunk) => void
 }
 
-export interface InjectGenerationResult<TOutput> {
+/**
+ * Return type for the injectGeneration function.
+ *
+ * @template TOutput - The output type (after optional transform)
+ * @template TInput - The input type accepted by `generate` (defaults to any object)
+ */
+export interface InjectGenerationResult<
+  TOutput,
+  TInput extends Record<string, any> = Record<string, any>,
+> {
   /** Trigger a generation request */
-  generate: (input: Record<string, any>) => Promise<void>
+  generate: (input: TInput) => Promise<void>
   /** The generation result, or null if not yet generated */
   result: Signal<TOutput | null>
   /** Whether a generation is currently in progress */
@@ -100,7 +109,8 @@ export function injectGeneration<
     onResult?: (result: TResult) => TTransformed
   },
 ): InjectGenerationResult<
-  InferGenerationOutputFromReturn<TResult, TTransformed>
+  InferGenerationOutputFromReturn<TResult, TTransformed>,
+  TInput
 > {
   assertInInjectionContext(injectGeneration)
 
@@ -228,9 +238,7 @@ export function injectGeneration<
   })
 
   return {
-    generate: ((input: TInput) => client.generate(input)) as (
-      input: Record<string, any>,
-    ) => Promise<void>,
+    generate: (input: TInput) => client.generate(input),
     result: result.asReadonly(),
     isLoading: isLoading.asReadonly(),
     error: error.asReadonly(),

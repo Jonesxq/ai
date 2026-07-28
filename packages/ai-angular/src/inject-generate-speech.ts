@@ -50,10 +50,5 @@ export function injectGenerateSpeech<TTransformed = void>(
     ...options,
     devtools,
   })
-  return {
-    ...generation,
-    generate: generation.generate as (
-      input: SpeechGenerateInput,
-    ) => Promise<void>,
-  }
+  return generation
 }

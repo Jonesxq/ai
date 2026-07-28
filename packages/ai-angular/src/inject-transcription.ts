@@ -53,10 +53,5 @@ export function injectTranscription<TTransformed = void>(
     ...options,
     devtools,
   })
-  return {
-    ...generation,
-    generate: generation.generate as (
-      input: TranscriptionGenerateInput,
-    ) => Promise<void>,
-  }
+  return generation
 }

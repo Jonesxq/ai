@@ -59,8 +59,12 @@ export interface CreateGenerationOptions<TInput, TResult, TOutput = TResult> {
  * Return type for the createGeneration function.
  *
  * @template TOutput - The output type (after optional transform)
+ * @template TInput - The input type accepted by `generate` (defaults to any object)
  */
-export interface CreateGenerationReturn<TOutput> {
+export interface CreateGenerationReturn<
+  TOutput,
+  TInput extends Record<string, any> = Record<string, any>,
+> {
   /** The generation result, or null if not yet generated */
   readonly result: TOutput | null
   /** Whether a generation is currently in progress */
@@ -70,7 +74,7 @@ export interface CreateGenerationReturn<TOutput> {
   /** Current state of the generation client */
   readonly status: GenerationClientState
   /** Trigger a generation request */
-  generate: (input: Record<string, any>) => Promise<void>
+  generate: (input: TInput) => Promise<void>
   /** Abort the current generation */
   stop: () => void
   /** Clear result, error, and return to idle */
@@ -135,7 +139,8 @@ export function createGeneration<
     onResult?: (result: TResult) => TTransformed
   },
 ): CreateGenerationReturn<
-  InferGenerationOutputFromReturn<TResult, TTransformed>
+  InferGenerationOutputFromReturn<TResult, TTransformed>,
+  TInput
 > {
   type TOutput = InferGenerationOutputFromReturn<TResult, TTransformed>
   const clientId =
@@ -279,7 +284,7 @@ export function createGeneration<
     get status() {
       return status
     },
-    generate: generate as (input: Record<string, any>) => Promise<void>,
+    generate,
     stop,
     reset,
     dispose,
