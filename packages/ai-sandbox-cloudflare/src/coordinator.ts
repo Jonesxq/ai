@@ -25,11 +25,28 @@ import { DurableObject } from 'cloudflare:workers'
 import { EventType } from '@tanstack/ai'
 import { RunController } from './run-driver'
 // NOTE: `isTerminalRunStatus` MUST come from './run-log' (terminal set
-// `done|error|aborted`), NEVER from '@tanstack/ai' — core exports a same-named
-// helper with an identical signature but a different terminal set
-// (`completed|failed|aborted`). Importing core's version would make every
-// finished run read as still-running, so the watchdog below would never release
-// the instance. TypeScript cannot catch the swap.
+// `done|error|aborted`), NEVER from '@tanstack/ai' (terminal set
+// `completed|failed|aborted`). The two `RunStatus` unions are disjoint apart
+// from the shared `'aborted'` literal, so tsc rejects a swapped import at
+// every call site, in both directions: passing a value of this module's
+// `RunStatus` where core's helper expects its own `RunStatus` is a compile
+// error (TS2345), and assigning core's helper to a `(status: RunStatus) =>
+// boolean` typed after this module's shape is also a compile error under
+// `strictFunctionTypes` (TS2322). The only value that can cross silently is
+// one already narrowed to the shared `'aborted'` literal, and both helpers
+// agree it is terminal, so that overlap is currently harmless. Keeping the
+// helper out of this package's public surface (see './run-log') is defence
+// in depth on top of that compile-time guard, not a substitute for it.
+//
+// If core's helper were wired in here anyway, every historical terminal run
+// (`done`/`error`/`aborted`, none of which core's helper recognizes) would
+// read as non-terminal. The watchdog alarm below iterates every `rec:*`
+// record on each tick, so it would re-attempt a bogus `failStalledRun` sweep
+// over every historical terminal record in the Durable Object's storage on
+// every tick, a cost that grows with run history. It is `ctx.waitUntil(done)`
+// (below), not this alarm, that keeps the instance alive until the run is
+// terminal, so the failure mode is wasted watchdog work, not "the instance is
+// never released."
 import { isTerminalRunStatus } from './run-log'
 import { DurableObjectRunEventLog } from './run-log-do'
 import type { ModelMessage, StreamChunk } from '@tanstack/ai'

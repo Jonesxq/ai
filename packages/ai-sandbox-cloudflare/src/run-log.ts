@@ -36,10 +36,25 @@
  * (b) {@link isTerminalRunStatus} here is intentionally NOT part of this
  *     package's public surface, precisely because `@tanstack/ai` exports a
  *     same-named helper with different semantics (its terminal set is
- *     `'completed' | 'failed' | 'aborted'`). The signatures are identical, so
- *     TypeScript cannot catch a mix-up: wiring core's helper into this log's
- *     status checks would make every finished run read as still-running. Keeping
- *     the helper module-internal removes the collision entirely.
+ *     `'completed' | 'failed' | 'aborted'`). The two `RunStatus` unions are
+ *     disjoint apart from the shared `'aborted'` literal, so TypeScript DOES
+ *     catch a mix-up at the call site: passing a value of this module's
+ *     `RunStatus` to core's helper, or assigning core's helper to a
+ *     `(status: RunStatus) => boolean` typed after this module's shape, is a
+ *     compile error in both directions (the latter under
+ *     `strictFunctionTypes`). The only value that crosses silently is one
+ *     already narrowed to `'aborted'`, and both helpers agree it is terminal,
+ *     so that overlap is harmless. Keeping the helper module-internal is
+ *     defence in depth on top of that compile-time guard, not the thing that
+ *     prevents the mix-up: it just means an app outside this package can
+ *     never import the wrong helper by name, since this one is not exported
+ *     to import at all.
+ *
+ *     This does NOT eliminate every collision: `RunStatus`,
+ *     `TerminalRunStatus`, and `RunRecord` are still exported as public
+ *     *types* from this package (via `./agent`), and core exports the same
+ *     three names with different meanings. See the `Legacy`-prefixed
+ *     re-export in `agent.ts` for how that is resolved.
  */
 import type { StreamChunk } from '@tanstack/ai'
 

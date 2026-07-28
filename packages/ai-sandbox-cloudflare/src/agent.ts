@@ -68,16 +68,31 @@ export { timingSafeBearerEqualWeb } from './web-crypto'
 // The run event-log vocabulary this package owns, for apps bringing their own
 // backend. `DurableObjectRunEventLog` (above) is this log's DO-storage-backed
 // mirror; `InMemoryRunEventLog` is the single-process reference implementation.
-// NOTE: the local `isTerminalRunStatus` is deliberately NOT exported — core
-// `@tanstack/ai` ships a same-signature helper with a DIFFERENT terminal set,
-// so an accidental swap would be invisible to the type checker.
+// NOTE: the local `isTerminalRunStatus` is deliberately NOT exported: core
+// `@tanstack/ai` ships a same-named helper with a DIFFERENT terminal set, and
+// while tsc rejects a swapped import at the call site (the two `RunStatus`
+// unions are disjoint apart from `'aborted'`), not exporting the helper at all
+// is defence in depth on top of that.
+//
+// `RunStatus`, `TerminalRunStatus`, `RunRecord`, and `RunError` are renamed to
+// a `Legacy` prefix on the way out of this module, because `@tanstack/ai` now
+// exports public types with those exact same names and different meanings
+// (core's terminal set is `'completed' | 'failed' | 'aborted'`, not this
+// package's `'done' | 'error' | 'aborted'`). The `Legacy` names describe this
+// package's OWN event-log vocabulary, which is deliberately distinct from
+// core's run-lifecycle types and is kept that way (see the SETTLED DECISION
+// note in `./run-log`): renaming at the export boundary keeps both usable
+// from the same app without a collision, without changing the persisted
+// Durable Object record shape. `RunEventLog`, `RunEvent`, and
+// `RunEventLogReadOptions` have no equivalent in `@tanstack/ai` and keep their
+// original names.
 export { InMemoryRunEventLog } from './run-log'
 export type {
   RunEventLog,
-  RunRecord,
   RunEvent,
-  RunStatus,
-  TerminalRunStatus,
-  RunError,
   RunEventLogReadOptions,
+  RunRecord as LegacyRunRecord,
+  RunStatus as LegacyRunStatus,
+  TerminalRunStatus as LegacyTerminalRunStatus,
+  RunError as LegacyRunError,
 } from './run-log'
