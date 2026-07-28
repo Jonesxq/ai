@@ -14,6 +14,8 @@ import { InMemoryLockStore, withLocks } from '@tanstack/ai/locks'
 import type { LockStore } from '@tanstack/ai/locks'
 import type {
   AIPersistence,
+  ArtifactStore,
+  BlobStore,
   ChatPersistence,
   ChatTranscriptPersistence,
   ChatTranscriptStores,
@@ -123,8 +125,17 @@ const uncertainInherited = composePersistence(base, {
 })
 expectTypeOf(uncertainInherited.stores.messages).toEqualTypeOf<MessageStore>()
 
-// Named shapes
-expectTypeOf(memoryPersistence()).toEqualTypeOf<ChatPersistence>()
+// Named shapes — memoryPersistence now includes generation stores too
+expectTypeOf(memoryPersistence()).toEqualTypeOf<
+  AIPersistence<{
+    messages: MessageStore
+    runs: RunStore
+    interrupts: InterruptStore
+    metadata: MetadataStore
+    artifacts: ArtifactStore
+    blobs: BlobStore
+  }>
+>()
 const transcript: ChatTranscriptPersistence = messagesOnly
 void transcript
 declare const fullChat: ChatPersistence

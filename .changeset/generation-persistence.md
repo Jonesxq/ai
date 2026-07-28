@@ -1,5 +1,9 @@
 ---
+'@tanstack/ai': minor
+'@tanstack/ai-utils': minor
+'@tanstack/ai-persistence': minor
 '@tanstack/ai-client': minor
+'@tanstack/ai-event-client': minor
 '@tanstack/ai-react': minor
 '@tanstack/ai-solid': minor
 '@tanstack/ai-vue': minor
@@ -7,9 +11,13 @@
 '@tanstack/ai-angular': minor
 ---
 
+Add generation persistence: a lightweight client resume snapshot plus optional durable storage of the generated media bytes.
+
+**Media byte storage (server).** When the persistence backend provides both an `artifacts` (`ArtifactStore`) and a `blobs` (`BlobStore`) store, `withGenerationPersistence` writes each generated file's bytes to the blob store (key `artifacts/<runId>/<artifactId>`), records an `ArtifactRecord`, attaches `PersistedArtifactRef`s to the result, and emits a `generation:artifacts` event so the client records them. Extraction is customizable via `extractArtifacts` / `nameArtifact`; `retrieveArtifact` / `retrieveBlob` (and the shared `artifactBlobKey`) serve the bytes back. `memoryPersistence()` ships in-memory `artifacts`/`blobs` stores; the generation activities gained `threadId` / `runId` options and run their result through middleware result transforms. `@tanstack/ai-utils` adds `base64ToUint8Array`.
+
 Add client-side generation persistence: a lightweight resume snapshot for media generation activities.
 
-Generation hooks (`useGenerateImage`, `useGenerateVideo`, `useGenerateAudio`, `useGenerateSpeech`, `useGeneration`, `useSummarize`, `useTranscription`, and their Solid/Vue/Svelte/Angular equivalents) now accept a `persistence` storage adapter and an `initialResumeSnapshot`, and expose `resumeSnapshot` / `resumeState` (plus `pendingArtifacts` / `resultArtifacts`, which stay empty until the server-side artifact pipeline ships in a follow-up).
+Generation hooks (`useGenerateImage`, `useGenerateVideo`, `useGenerateAudio`, `useGenerateSpeech`, `useGeneration`, `useSummarize`, `useTranscription`, and their Solid/Vue/Svelte/Angular equivalents) now accept a `persistence` storage adapter and an `initialResumeSnapshot`, and expose `resumeSnapshot` / `resumeState` (plus `pendingArtifacts` / `resultArtifacts`, populated from the server-side artifact pipeline above when an `artifacts` + `blobs` backend is configured).
 
 As a run streams, the client builds a `GenerationResumeSnapshot` — run identity, status, errors, and result metadata, but **never** the generated media bytes — and writes it to the adapter under the key `generation:<id>`, skipping writes with no material change. On construction the client reads the snapshot back (validated with the new `parseGenerationResumeSnapshot`) unless an explicit `initialResumeSnapshot` seed is provided, so the last run's outcome survives a reload. `stop()` and transport-level failures record terminal snapshots, and `reset()` clears the persisted record. The snapshot never exposes a `resume()` action and never restarts provider work — generation still only begins when `generate(...)` is called.
 

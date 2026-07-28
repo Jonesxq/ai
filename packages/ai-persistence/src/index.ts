@@ -23,6 +23,16 @@ export type {
   ChatTranscriptPersistence,
   ChatPersistence,
   ChatWithInterruptsPersistence,
+  // Generation artifact + blob store contracts
+  ArtifactRecord,
+  ArtifactStore,
+  BlobBody,
+  BlobRecord,
+  BlobObject,
+  BlobListPage,
+  BlobPutOptions,
+  BlobListOptions,
+  BlobStore,
   AIPersistence,
   AIPersistenceOverrides,
   ComposedAIPersistenceStores,
@@ -33,14 +43,30 @@ export type {
 // AIPersistenceStores is intentionally NOT re-exported — use a named chat
 // shape or AIPersistence<{ messages: MessageStore, … }>.
 
-// Middleware (state only — locks live in @tanstack/ai as withLocks)
+// Core artifact wire types (re-exported for convenience)
+export type {
+  PersistedArtifactActivity,
+  PersistedArtifactRef,
+  PersistedArtifactRole,
+} from '@tanstack/ai'
+
+// Middleware (chat state — locks live in @tanstack/ai as withLocks)
 export { withPersistence, withGenerationPersistence } from './middleware'
+export type {
+  WithPersistenceOptions,
+  GenerationArtifactDescriptor,
+  GenerationArtifactExtractionInput,
+  GenerationArtifactNameInput,
+} from './middleware'
 
 // Server helper: rehydrate a thread's messages for a client load
 export { reconstructChat } from './reconstruct'
 export type { ReconstructChatOptions } from './reconstruct'
 
-// Reference in-memory implementation (state stores only)
+// Server helpers: retrieve a persisted generation artifact + its bytes
+export { retrieveArtifact, retrieveBlob, artifactBlobKey } from './retrieve'
+
+// Reference in-memory implementation
 export { memoryPersistence } from './memory'
 
 // Interrupt controller
