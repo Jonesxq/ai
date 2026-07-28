@@ -128,10 +128,5 @@ export function useGenerateSpeech<TTransformed = void>(
     devtools,
   })
 
-  return {
-    ...generation,
-    generate: generation.generate as (
-      input: SpeechGenerateInput,
-    ) => Promise<void>,
-  }
+  return generation
 }
