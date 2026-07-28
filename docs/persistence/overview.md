@@ -290,6 +290,12 @@ from whichever stores are present (with entrypoint requirements — see
 Named shapes: `ChatTranscriptStores` (messages floor), `ChatPersistenceStores`
 (all four), `ChatWithInterruptsStores`. See [Controls](./controls).
 
+The `runs` store is typed against `RunRecord` and `RunStore` from
+`@tanstack/ai`, not from `@tanstack/ai-persistence`. That single definition is
+what a sandbox run driver and chat persistence both key on: `withPersistence`
+writes the record for a `runId`, and the sandbox driver reads that same
+record, so the two never end up disagreeing about the state of one run.
+
 Need a mutex across instances (cross-worker coordination)? Use `withLocks` and a
 `LockStore` from `@tanstack/ai/locks`; see [Locks](../advanced/locks).
 
