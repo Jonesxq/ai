@@ -138,6 +138,10 @@ function createMessageStore(db: DatabaseSync) {
 // ---------------------------------------------------------------------------
 // RunStore — idempotent create/resume + patch.
 // ---------------------------------------------------------------------------
+// `status` is stored verbatim as text, so the whole `RunStatus` union round-trips
+// — including `'aborted'` — without a schema change. The reclaim fields
+// (`sandboxKey`, `detachedSince`, `cancelRequested`) are optional on `RunRecord`
+// and have no columns here: Phase 1 does not persist them.
 function mapRun(row: RunRow): RunRecord {
   return {
     runId: row.run_id,
@@ -185,6 +189,12 @@ function createRunStore(db: DatabaseSync) {
     update(runId, patch) {
       // Build a dynamic SET from only the provided fields; empty patch is a
       // no-op, and a missing run_id simply updates zero rows (no throw/create).
+      //
+      // Only the four columns this schema actually has are mapped. `RunStore`'s
+      // patch type also admits the reclaim fields (`sandboxKey`,
+      // `detachedSince`, `cancelRequested`); Phase 1 does not persist them, so
+      // they are deliberately ignored here. Never splice a patch key into SQL
+      // directly — the column name always comes from this fixed literal set.
       const sets: Array<string> = []
       const params: Array<string | number> = []
       if (patch.status !== undefined) {

@@ -1,4 +1,4 @@
-import type { ModelMessage, Scope, TokenUsage } from '@tanstack/ai'
+import type { ModelMessage, RunStore, Scope } from '@tanstack/ai'
 
 // Re-export the shared identity type so app code can import Scope from either
 // `@tanstack/ai` or `@tanstack/ai-persistence`. See {@link Scope} security notes:
@@ -70,75 +70,16 @@ export interface MessageStore {
   saveThread: (threadId: string, messages: Array<ModelMessage>) => Promise<void>
 }
 
-export type RunStatus = 'running' | 'completed' | 'failed' | 'interrupted'
-
-/**
- * A single **chat** run (one agent turn within a conversation).
- *
- * `threadId` is the conversation key ({@link Scope.threadId}) — never a
- * generation `requestId`. Generation jobs must not reuse this record by
- * faking `threadId = requestId`; they need a separate job store (see
- * `withGenerationPersistence` JSDoc).
- *
- * @property startedAt - Epoch ms when the run was first created.
- * @property finishedAt - Epoch ms when the run reached a terminal status.
- */
-export interface RunRecord {
-  runId: string
-  /** Conversation this run belongs to — same as {@link Scope.threadId}. */
-  threadId: string
-  status: RunStatus
-  startedAt: number
-  finishedAt?: number
-  error?: string
-  usage?: TokenUsage
-}
-
-/** Durable store for run lifecycle records. */
-export interface RunStore {
-  /**
-   * Create a run record, or return the existing one if `runId` is already
-   * present (resume).
-   *
-   * INVARIANT (idempotency): if a record for `runId` already exists it is
-   * returned **unchanged** and the passed `threadId`/`startedAt`/`status` are
-   * ignored. This is what makes resuming a run safe — the second call for a
-   * `runId` must not mutate `startedAt`, `threadId`, or status. `status`
-   * defaults to `'running'` on first creation.
-   */
-  createOrResume: (
-    input: Pick<RunRecord, 'runId' | 'threadId' | 'startedAt'> & {
-      status?: RunStatus
-    },
-  ) => Promise<RunRecord>
-  /**
-   * Patch a run record's mutable fields.
-   *
-   * INVARIANT: updating a `runId` that does not exist is a **no-op** — it must
-   * not throw and must not create a record.
-   */
-  update: (
-    runId: string,
-    patch: Partial<
-      Pick<RunRecord, 'status' | 'finishedAt' | 'error' | 'usage'>
-    >,
-  ) => Promise<void>
-  /** Return the run record for `runId`, or `null` if none exists. */
-  get: (runId: string) => Promise<RunRecord | null>
-  /**
-   * The most recent `'running'` run for `threadId`, or `null` if none is active.
-   *
-   * OPTIONAL — callers feature-detect it (`store.findActiveRun?.(threadId)`) and
-   * degrade to "no active run" when a backend has not implemented it.
-   *
-   * This resolves "does this thread have a live run to attach to?" from the
-   * STABLE thread id, which is the durable basis for reconnecting a client (a
-   * reload, or the same thread opened on another device) — independent of the
-   * ephemeral run id, which a single turn may mint several of. When more than
-   * one run is `'running'`, the one with the greatest `startedAt` wins.
-   */
-  findActiveRun?: (threadId: string) => Promise<RunRecord | null>
-}
+// Run lifecycle types live in `@tanstack/ai` and are re-exported here: one run,
+// one record — shared by this package's `runs` store and `@tanstack/ai-sandbox`'s
+// run driver, instead of each package keeping a rival definition that can drift.
+export type {
+  RunStatus,
+  TerminalRunStatus,
+  RunRecord,
+  RunStore,
+} from '@tanstack/ai'
+export { isTerminalRunStatus, defineRunStore } from '@tanstack/ai'
 
 /** Lifecycle status of a human-in-the-loop interrupt. */
 export type InterruptStatus = 'pending' | 'resolved' | 'cancelled'
@@ -262,10 +203,6 @@ export interface MetadataStore {
 
 /** Type a {@link MessageStore} implementation inline. */
 export function defineMessageStore(store: MessageStore): MessageStore {
-  return store
-}
-/** Type a {@link RunStore} implementation inline. */
-export function defineRunStore(store: RunStore): RunStore {
   return store
 }
 /** Type an {@link InterruptStore} implementation inline. */
