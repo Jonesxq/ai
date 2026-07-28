@@ -1451,4 +1451,322 @@ describe('GenerationClient', () => {
       })
     })
   })
+
+  describe('resume snapshot lifecycle', () => {
+    function createMapPersistence(seed?: Record<string, unknown>): {
+      store: Map<string, unknown>
+      persistence: GenerationPersistence
+    } {
+      const store = new Map<string, unknown>(Object.entries(seed ?? {}))
+      const persistence = {
+        getItem: vi.fn((key: string) => store.get(key) ?? null),
+        setItem: vi.fn((key: string, value: unknown) => {
+          store.set(key, value)
+        }),
+        removeItem: vi.fn((key: string) => {
+          store.delete(key)
+        }),
+        // The Map-backed fake is looser than GenerationPersistence's value
+        // type on purpose: hydration must survive arbitrary stored shapes.
+      } as unknown as GenerationPersistence
+      return { store, persistence }
+    }
+
+    const storedSnapshot: GenerationResumeSnapshot = {
+      schemaVersion: 1,
+      resumeState: null,
+      status: 'complete',
+      result: { id: 'result-1', model: 'image-model' },
+    }
+
+    it('hydrates a stored snapshot under generation:<id> on construction', async () => {
+      const { persistence } = createMapPersistence({
+        'generation:hero': storedSnapshot,
+      })
+      const onResumeSnapshotChange = vi.fn()
+      const client = new GenerationClient({
+        id: 'hero',
+        connection: createMockConnection([]),
+        persistence,
+        onResumeSnapshotChange,
+      })
+
+      await waitForCondition(() => {
+        expect(client.getResumeSnapshot()).toMatchObject({
+          status: 'complete',
+          result: { id: 'result-1' },
+        })
+      })
+      expect(persistence.getItem).toHaveBeenCalledWith('generation:hero')
+      expect(onResumeSnapshotChange).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'complete' }),
+      )
+    })
+
+    it('skips hydration when an explicit initialResumeSnapshot seed is provided', async () => {
+      const { persistence } = createMapPersistence({
+        'generation:hero': storedSnapshot,
+      })
+      const seed: GenerationResumeSnapshot = {
+        resumeState: null,
+        status: 'error',
+        error: { message: 'seeded' },
+      }
+      const client = new GenerationClient({
+        id: 'hero',
+        connection: createMockConnection([]),
+        persistence,
+        initialResumeSnapshot: seed,
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(persistence.getItem).not.toHaveBeenCalled()
+      expect(client.getResumeSnapshot()).toMatchObject({
+        status: 'error',
+        error: { message: 'seeded' },
+      })
+    })
+
+    it('ignores invalid stored values and read failures without throwing', async () => {
+      const warningSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const { persistence } = createMapPersistence({
+        'generation:hero': { status: 'not-a-status' },
+      })
+      const client = new GenerationClient({
+        id: 'hero',
+        connection: createMockConnection([]),
+        persistence,
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(client.getResumeSnapshot()).toBeUndefined()
+
+      const throwingPersistence = {
+        getItem: vi.fn(() => {
+          throw new Error('corrupt JSON')
+        }),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      } as unknown as GenerationPersistence
+      const client2 = new GenerationClient({
+        id: 'hero',
+        connection: createMockConnection([]),
+        persistence: throwingPersistence,
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(client2.getResumeSnapshot()).toBeUndefined()
+      warningSpy.mockRestore()
+    })
+
+    it('marks the snapshot no longer resumable when stop() aborts a run', async () => {
+      const gate = createDeferred()
+      const connection: ConnectConnectionAdapter = {
+        async *connect() {
+          yield {
+            type: EventType.RUN_STARTED,
+            runId: 'run-1',
+            threadId: 'thread-1',
+            timestamp: Date.now(),
+          } satisfies StreamChunk
+          await gate.promise
+        },
+      }
+      const { store, persistence } = createMapPersistence()
+      const client = new GenerationClient({
+        id: 'hero',
+        connection,
+        persistence,
+      })
+
+      const generatePromise = client.generate({ prompt: 'test' })
+      await waitForCondition(() => {
+        expect(client.getResumeSnapshot()?.status).toBe('running')
+      })
+      client.stop()
+      gate.resolve(undefined)
+      await generatePromise
+
+      expect(client.getResumeSnapshot()).toMatchObject({
+        status: 'idle',
+        resumeState: null,
+      })
+      await waitForCondition(() => {
+        expect(store.get('generation:hero')).toMatchObject({
+          status: 'idle',
+          resumeState: null,
+        })
+      })
+    })
+
+    it('records a transport-level failure as an error snapshot', async () => {
+      const connection: ConnectConnectionAdapter = {
+        // eslint-disable-next-line require-yield -- the stream fails before producing any chunk
+        async *connect() {
+          throw new Error('network dropped')
+        },
+      }
+      const { store, persistence } = createMapPersistence()
+      const client = new GenerationClient({
+        id: 'hero',
+        connection,
+        persistence,
+      })
+
+      await client.generate({ prompt: 'test' })
+
+      expect(client.getResumeSnapshot()).toMatchObject({
+        status: 'error',
+        resumeState: null,
+        error: { message: 'network dropped' },
+      })
+      await waitForCondition(() => {
+        expect(store.get('generation:hero')).toMatchObject({
+          status: 'error',
+          error: { message: 'network dropped' },
+        })
+      })
+    })
+
+    it('records a complete snapshot for plain fetcher runs with no seed', async () => {
+      const { store, persistence } = createMapPersistence()
+      const client = new GenerationClient({
+        id: 'hero',
+        fetcher: async () => ({ id: 'result-9', model: 'image-model' }),
+        persistence,
+      })
+
+      await client.generate({ prompt: 'test' })
+
+      expect(client.getResumeSnapshot()).toMatchObject({
+        status: 'complete',
+        resumeState: null,
+        result: { id: 'result-9', model: 'image-model' },
+      })
+      await waitForCondition(() => {
+        expect(store.get('generation:hero')).toMatchObject({
+          status: 'complete',
+        })
+      })
+    })
+
+    it('reset() clears the snapshot and removes the persisted record', async () => {
+      const { store, persistence } = createMapPersistence()
+      const onResumeSnapshotChange = vi.fn()
+      const client = new GenerationClient({
+        id: 'hero',
+        fetcher: async () => ({ id: 'result-9' }),
+        persistence,
+        onResumeSnapshotChange,
+      })
+
+      await client.generate({ prompt: 'test' })
+      await waitForCondition(() => {
+        expect(store.has('generation:hero')).toBe(true)
+      })
+
+      client.reset()
+
+      expect(client.getResumeSnapshot()).toBeUndefined()
+      expect(onResumeSnapshotChange).toHaveBeenLastCalledWith(undefined)
+      await waitForCondition(() => {
+        expect(persistence.removeItem).toHaveBeenCalledWith('generation:hero')
+        expect(store.has('generation:hero')).toBe(false)
+      })
+    })
+
+    it('skips writes whose snapshot only differs in lastEvent', async () => {
+      const { persistence } = createMapPersistence()
+      const client = new GenerationClient({
+        id: 'hero',
+        connection: createMockConnection([
+          {
+            type: EventType.RUN_STARTED,
+            runId: 'run-1',
+            threadId: 'thread-1',
+            timestamp: Date.now(),
+          },
+          {
+            type: EventType.CUSTOM,
+            name: 'generation:progress',
+            value: { progress: 10 },
+            runId: 'run-1',
+            threadId: 'thread-1',
+            timestamp: Date.now(),
+          },
+          {
+            type: EventType.CUSTOM,
+            name: 'generation:progress',
+            value: { progress: 20 },
+            runId: 'run-1',
+            threadId: 'thread-1',
+            timestamp: Date.now(),
+          },
+          {
+            type: EventType.RUN_FINISHED,
+            runId: 'run-1',
+            threadId: 'thread-1',
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          },
+        ]),
+        persistence,
+      })
+
+      await client.generate({ prompt: 'test' })
+      await waitForCondition(() => {
+        // One write for the running state, one for the terminal state — the
+        // two progress chunks change nothing material.
+        expect(persistence.setItem).toHaveBeenCalledTimes(2)
+      })
+    })
+
+    it('revives after dispose when devtools remount (StrictMode replay)', async () => {
+      const connectSpy = vi.fn(async function* () {
+        yield {
+          type: EventType.RUN_STARTED,
+          runId: 'run-1',
+          threadId: 'thread-1',
+          timestamp: Date.now(),
+        } satisfies StreamChunk
+        yield {
+          type: EventType.RUN_FINISHED,
+          runId: 'run-1',
+          threadId: 'thread-1',
+          finishReason: 'stop',
+          timestamp: Date.now(),
+        } satisfies StreamChunk
+      })
+      const client = new GenerationClient({
+        connection: { connect: connectSpy },
+      })
+
+      // StrictMode: mount → cleanup → mount against the same memoized client.
+      client.mountDevtools()
+      client.dispose()
+      client.mountDevtools()
+
+      await client.generate({ prompt: 'test' })
+      expect(connectSpy).toHaveBeenCalledTimes(1)
+      expect(client.getStatus()).toBe('success')
+    })
+
+    it('ignores generate() on a client that is disposed and not remounted', async () => {
+      const connectSpy = vi.fn(async function* () {
+        yield {
+          type: EventType.RUN_STARTED,
+          runId: 'run-1',
+          threadId: 'thread-1',
+          timestamp: Date.now(),
+        } satisfies StreamChunk
+      })
+      const client = new GenerationClient({
+        connection: { connect: connectSpy },
+      })
+
+      client.mountDevtools()
+      client.dispose()
+
+      await client.generate({ prompt: 'test' })
+      expect(connectSpy).not.toHaveBeenCalled()
+    })
+  })
 })

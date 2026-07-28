@@ -9,11 +9,13 @@ import {
 import { resolveMediaPrompt } from '@tanstack/ai'
 import { generateImageFn, generateImageStreamFn } from '../lib/server-fns'
 
-// Reuse the shared web-storage adapter for the lightweight, read-only
-// generation resume snapshot. Only run identity, status, errors, and result
-// metadata are stored — never the generated image bytes.
+// Reuse the shared web-storage adapter for the lightweight generation resume
+// snapshot. Only run identity, status, errors, and result metadata are stored
+// — never the generated image bytes. The client namespaces its record under
+// `generation:<id>`, and reads it back on mount so the last run's outcome
+// survives a full page reload.
 const imageSnapshots = localStoragePersistence({
-  keyPrefix: 'example:generation:',
+  keyPrefix: 'example:',
 })
 
 function StreamingImageGeneration() {
@@ -89,16 +91,23 @@ function PersistedImageGeneration() {
     persistence: imageSnapshots,
   })
 
+  const snapshot = hookReturn.resumeSnapshot
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-orange-500/20 bg-gray-800/50 px-4 py-3 text-sm">
-        <p className="text-gray-400">
-          Resume status: <span className="text-white">{hookReturn.status}</span>
-        </p>
         {hookReturn.resumeState ? (
           <p className="text-gray-400">
-            Last run:{' '}
+            Run in flight:{' '}
             <span className="text-white">{hookReturn.resumeState.runId}</span>
+          </p>
+        ) : snapshot ? (
+          <p className="text-gray-400">
+            Last run:{' '}
+            <span className="text-white">
+              {snapshot.status}
+              {snapshot.error ? ` — ${snapshot.error.message}` : ''}
+              {snapshot.result?.model ? ` (${snapshot.result.model})` : ''}
+            </span>
           </p>
         ) : (
           <p className="text-gray-500">No persisted run yet.</p>

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { EventType } from '@tanstack/ai/client'
 import {
   GENERATION_EVENTS,
+  parseGenerationResumeSnapshot,
   updateGenerationResumeSnapshot,
 } from '../src/generation-types'
 import type { PersistedArtifactRef, StreamChunk } from '@tanstack/ai/client'
@@ -177,39 +178,39 @@ describe('generation resume state reducer', () => {
     expect(JSON.stringify(snapshot)).not.toContain('b64Json')
   })
 
-  it('omits non-durable and oversized result URLs from resume snapshots', () => {
-    const oversizedUrl = `https://example.com/${'x'.repeat(4096)}`
+  it('keeps a durable artifact externalUrl and strips non-durable or oversized ones', () => {
+    const durableUrl = 'https://cdn.example.com/artifacts/image.png'
+    const durable = reduceChunks([
+      {
+        type: EventType.CUSTOM,
+        name: GENERATION_EVENTS.ARTIFACTS,
+        value: [{ ...artifactRef, externalUrl: durableUrl }],
+        threadId: 'thread-1',
+        runId: 'run-1',
+        timestamp: 1,
+      },
+    ])
+    expect(durable.pendingArtifacts?.[0]?.externalUrl).toBe(durableUrl)
+
     const unsafeUrls = [
       'data:image/png;base64,raw-image-bytes',
       'blob:https://example.com/raw-image-bytes',
-      oversizedUrl,
+      `https://example.com/${'x'.repeat(4096)}`,
+      'not a url',
     ]
-
-    for (const url of unsafeUrls) {
+    for (const externalUrl of unsafeUrls) {
       const snapshot = reduceChunks([
         {
           type: EventType.CUSTOM,
-          name: GENERATION_EVENTS.RESULT,
-          value: {
-            id: 'result-1',
-            model: 'image-model',
-            url,
-            artifacts: [artifactRef],
-          },
+          name: GENERATION_EVENTS.ARTIFACTS,
+          value: [{ ...artifactRef, externalUrl }],
           threadId: 'thread-1',
           runId: 'run-1',
-          timestamp: 2,
+          timestamp: 1,
         },
       ])
-
-      expect(snapshot.result).toMatchObject({
-        id: 'result-1',
-        model: 'image-model',
-        artifacts: [artifactRef],
-      })
-      expect(snapshot.result).not.toHaveProperty('url')
-      expect(JSON.stringify(snapshot)).not.toContain('raw-image-bytes')
-      expect(JSON.stringify(snapshot)).not.toContain(oversizedUrl)
+      expect(snapshot.pendingArtifacts).toEqual([artifactRef])
+      expect(snapshot.pendingArtifacts?.[0]).not.toHaveProperty('externalUrl')
     }
   })
 
@@ -242,7 +243,7 @@ describe('generation resume state reducer', () => {
     })
   })
 
-  it('does not model explicit stop as durable cancel state', () => {
+  it('captures the video job id from video:job:created before any result arrives', () => {
     const snapshot = reduceChunks([
       {
         type: EventType.RUN_STARTED,
@@ -250,10 +251,150 @@ describe('generation resume state reducer', () => {
         runId: 'run-1',
         timestamp: 1,
       },
+      {
+        type: EventType.CUSTOM,
+        name: GENERATION_EVENTS.VIDEO_JOB_CREATED,
+        value: { jobId: 'job-42' },
+        threadId: 'thread-1',
+        runId: 'run-1',
+        timestamp: 2,
+      },
     ])
 
     expect(snapshot.status).toBe('running')
-    expect(snapshot).not.toHaveProperty('cancelled')
-    expect(snapshot).not.toHaveProperty('cancelEndpoint')
+    expect(snapshot.result?.jobId).toBe('job-42')
+  })
+
+  it('merges an initial seed and lets later run events update it', () => {
+    const seed: GenerationResumeSnapshot = {
+      resumeState: null,
+      status: 'error',
+      error: { message: 'previous failure' },
+      pendingArtifacts: [artifactRef],
+    }
+
+    const midRun = reduceChunks(
+      [
+        {
+          type: EventType.CUSTOM,
+          name: GENERATION_EVENTS.PROGRESS,
+          value: { progress: 10 },
+          threadId: 'thread-1',
+          runId: 'run-2',
+          timestamp: 1,
+        },
+      ],
+      seed,
+    )
+    // Without a RUN_STARTED boundary the seed's fields are carried forward.
+    expect(midRun.resumeState).toEqual({ threadId: 'thread-1', runId: 'run-2' })
+    expect(midRun.error).toEqual({ message: 'previous failure' })
+    expect(midRun.pendingArtifacts).toEqual([artifactRef])
+  })
+
+  it('drops stale error, result, and artifacts when a new run starts', () => {
+    const seed: GenerationResumeSnapshot = {
+      resumeState: null,
+      status: 'error',
+      error: { message: 'previous failure' },
+      result: { id: 'old-result' },
+      pendingArtifacts: [artifactRef],
+    }
+
+    const snapshot = reduceChunks(
+      [
+        {
+          type: EventType.RUN_STARTED,
+          threadId: 'thread-1',
+          runId: 'run-2',
+          timestamp: 1,
+        },
+      ],
+      seed,
+    )
+
+    expect(snapshot.status).toBe('running')
+    expect(snapshot.resumeState).toEqual({
+      threadId: 'thread-1',
+      runId: 'run-2',
+    })
+    expect(snapshot.error).toBeUndefined()
+    expect(snapshot.result).toBeUndefined()
+    expect(snapshot.pendingArtifacts).toBeUndefined()
+  })
+})
+
+describe('parseGenerationResumeSnapshot', () => {
+  it('round-trips a reducer-produced snapshot through JSON, dropping lastEvent', () => {
+    const produced = reduceChunks([
+      {
+        type: EventType.RUN_STARTED,
+        threadId: 'thread-1',
+        runId: 'run-1',
+        timestamp: 1,
+      },
+      {
+        type: EventType.CUSTOM,
+        name: GENERATION_EVENTS.RESULT,
+        value: { id: 'result-1', model: 'image-model', artifacts: [artifactRef] },
+        threadId: 'thread-1',
+        runId: 'run-1',
+        timestamp: 2,
+      },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: 'thread-1',
+        runId: 'run-1',
+        finishReason: 'stop',
+        timestamp: 3,
+      },
+    ])
+
+    const parsed = parseGenerationResumeSnapshot(
+      JSON.parse(JSON.stringify(produced)),
+    )
+    expect(parsed).toBeDefined()
+    expect(parsed?.status).toBe('complete')
+    expect(parsed?.resumeState).toBeNull()
+    expect(parsed?.result).toEqual(produced.result)
+    expect(parsed?.lastEvent).toBeUndefined()
+  })
+
+  it('rejects garbage, invalid statuses, malformed resume state, and future schema versions', () => {
+    expect(parseGenerationResumeSnapshot(undefined)).toBeUndefined()
+    expect(parseGenerationResumeSnapshot('running')).toBeUndefined()
+    expect(parseGenerationResumeSnapshot({})).toBeUndefined()
+    expect(
+      parseGenerationResumeSnapshot({ resumeState: null, status: 'paused' }),
+    ).toBeUndefined()
+    expect(
+      parseGenerationResumeSnapshot({
+        resumeState: { threadId: 'thread-1' },
+        status: 'running',
+      }),
+    ).toBeUndefined()
+    expect(
+      parseGenerationResumeSnapshot({
+        schemaVersion: 2,
+        resumeState: null,
+        status: 'idle',
+      }),
+    ).toBeUndefined()
+  })
+
+  it('strips unknown fields and re-validates artifact refs from storage', () => {
+    const parsed = parseGenerationResumeSnapshot({
+      resumeState: { threadId: 'thread-1', runId: 'run-1' },
+      status: 'running',
+      pendingArtifacts: [artifactRef, { b64Json: 'raw-bytes' }],
+      error: { message: 'boom', code: 'E1', extra: 'dropped' },
+      injected: 'dropped',
+    })
+
+    expect(parsed).toBeDefined()
+    expect(parsed?.pendingArtifacts).toEqual([artifactRef])
+    expect(parsed?.error).toEqual({ message: 'boom', code: 'E1' })
+    expect(JSON.stringify(parsed)).not.toContain('raw-bytes')
+    expect(JSON.stringify(parsed)).not.toContain('dropped')
   })
 })
