@@ -1,6 +1,5 @@
 import { expectTypeOf } from 'vitest'
-import { durableStream } from '../src'
-import type { DurableStreamOffset } from '../src'
+import type { DurableStreamOffset, durableStream } from '../src'
 
 declare const durability: ReturnType<typeof durableStream>
 declare const offset: DurableStreamOffset
