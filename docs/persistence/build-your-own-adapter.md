@@ -84,7 +84,8 @@ CREATE TABLE IF NOT EXISTS runs (
   started_at integer NOT NULL,
   finished_at integer,
   error text,
-  usage_json text
+  usage_json text,
+  detached_since integer
 );
 CREATE TABLE IF NOT EXISTS interrupts (
   interrupt_id text PRIMARY KEY NOT NULL,
@@ -162,9 +163,10 @@ import type { RunRecord, RunStatus } from '@tanstack/ai-persistence'
 function toRunStatus(value: unknown): RunStatus {
   switch (value) {
     case 'running':
+    case 'interrupted':
     case 'completed':
     case 'failed':
-    case 'interrupted':
+    case 'aborted':
       return value
     default:
       throw new TypeError(`Unexpected run status: ${String(value)}`)
@@ -184,6 +186,9 @@ function mapRun(row: Record<string, unknown>): RunRecord {
     ...(typeof row.usage_json === 'string'
       ? { usage: JSON.parse(row.usage_json) }
       : {}),
+    ...(row.detached_since != null
+      ? { detachedSince: Number(row.detached_since) }
+      : {}),
   }
 }
 
@@ -196,6 +201,13 @@ function createRunStore(db: DatabaseSync) {
   const active = db.prepare(
     `SELECT * FROM runs WHERE thread_id = ? AND status = 'running'
      ORDER BY started_at DESC LIMIT 1`,
+  )
+  const byThread = db.prepare(
+    'SELECT * FROM runs WHERE thread_id = ? ORDER BY started_at ASC',
+  )
+  const reclaimable = db.prepare(
+    `SELECT * FROM runs WHERE status = 'running' AND detached_since IS NOT NULL
+     AND detached_since <= ? ORDER BY started_at ASC`,
   )
   return defineRunStore({
     async createOrResume(input) {
@@ -229,6 +241,10 @@ function createRunStore(db: DatabaseSync) {
         sets.push('usage_json = ?')
         params.push(JSON.stringify(patch.usage))
       }
+      if (patch.detachedSince !== undefined) {
+        sets.push('detached_since = ?')
+        params.push(patch.detachedSince)
+      }
       if (sets.length === 0) return
       params.push(runId)
       db.prepare(`UPDATE runs SET ${sets.join(', ')} WHERE run_id = ?`).run(
@@ -247,6 +263,18 @@ function createRunStore(db: DatabaseSync) {
     async findActiveRun(threadId) {
       const row = active.get(threadId)
       return row ? mapRun(row) : null
+    },
+    // Every run for a thread, oldest first. Optional: only needed to render a
+    // thread's past agent activity.
+    async listByThread(threadId) {
+      return byThread.all(threadId).map(mapRun)
+    },
+    // Runs a reaper would sweep: still `running`, and detached since before
+    // `now - ttlMs`. Nothing in TanStack AI calls this today, and nothing sets
+    // `detachedSince` for you either: a caller sets it when a viewer detaches.
+    // This method only answers the query; optional, like the others above.
+    async listReclaimable({ now, ttlMs }) {
+      return reclaimable.all(now - ttlMs).map(mapRun)
     },
   })
 }
@@ -611,48 +639,99 @@ interface MessageStore {
 
 ### RunStore
 
+`RunStore` and `RunRecord` come from `@tanstack/ai`; `@tanstack/ai-persistence`
+re-exports both, which is why the samples on this page import them from either
+package.
+
 ```ts
 import type { TokenUsage } from '@tanstack/ai'
+
+type TerminalRunStatus = 'completed' | 'failed' | 'aborted'
+type RunStatus = 'running' | 'interrupted' | TerminalRunStatus
 
 interface RunRecord {
   runId: string
   threadId: string
-  status: 'running' | 'completed' | 'failed' | 'interrupted'
+  status: RunStatus
   startedAt: number // epoch ms
   finishedAt?: number // epoch ms, set once the run reaches a terminal status
   error?: string
   usage?: TokenUsage // token counts, from @tanstack/ai
+  sandboxKey?: string // sandbox this run is bound to, if it ran in one
+  // Epoch ms since the last viewer detached. Nothing in the framework sets
+  // this today; a caller sets it when a viewer disconnects.
+  detachedSince?: number
+  // Declared for a future cancel path. Nothing reads or writes it yet.
+  cancelRequested?: boolean
 }
 
 interface RunStore {
+  // Required: insert-if-absent. An existing runId returns the stored record
+  // unchanged, so resuming a run never resets its startedAt or status.
   createOrResume(input: {
     runId: string
     threadId: string
-    status?: RunRecord['status']
+    status?: RunStatus
     startedAt: number
   }): Promise<RunRecord>
+  // Required: patching an unknown runId is a no-op, not an error.
   update(
     runId: string,
     patch: Partial<
-      Pick<RunRecord, 'status' | 'finishedAt' | 'error' | 'usage'>
+      Pick<
+        RunRecord,
+        | 'status'
+        | 'finishedAt'
+        | 'error'
+        | 'usage'
+        | 'sandboxKey'
+        | 'detachedSince'
+        | 'cancelRequested'
+      >
     >,
   ): Promise<void>
+  // Required.
   get(runId: string): Promise<RunRecord | null>
-  // The most recent 'running' run for a thread (greatest `startedAt` wins), or
-  // null when the thread is idle. Optional on the contract, but implement it:
-  // `reconstructChat` feature-detects it to report `activeRun`, which is how a
-  // hydrating client tails a run that is still generating.
+  // Optional. The most recent 'running' run for a thread (greatest
+  // `startedAt` wins), or null when the thread is idle. `reconstructChat`
+  // feature-detects it to report `activeRun`, which is how a hydrating client
+  // tails a run that is still generating.
   findActiveRun?(threadId: string): Promise<RunRecord | null>
+  // Optional. Every run for a thread, ascending by startedAt. Only needed to
+  // render a thread's past agent activity.
+  listByThread?(threadId: string): Promise<Array<RunRecord>>
+  // Optional. Runs where status is 'running' and detachedSince <= now - ttlMs
+  // (inclusive). This is the query a reaper would run to find abandoned runs;
+  // TanStack AI does not ship a reaper today, so nothing calls this yet.
+  listReclaimable?(opts: {
+    now: number
+    ttlMs: number
+  }): Promise<Array<RunRecord>>
 }
 ```
 
-Implement `createOrResume` idempotently: a second call for an existing `runId`
-returns the stored record unchanged, which is what makes resuming a run safe.
-`update` against an unknown `runId` is a no-op. Retries may repeat the same run
-id. Implement `findActiveRun` too unless you never tail in-flight runs on
-reload: without it, `reconstructChat` always reports `activeRun: null`, so a
-client that reloads (or switches back to) a still-generating thread restores the
-transcript but never resumes the live reply.
+`createOrResume`, `update`, and `get` are the whole floor: a backend that
+implements only those three is a valid `RunStore`. `findActiveRun`,
+`listByThread`, and `listReclaimable` are genuinely optional, not
+recommended-but-checked: consumers feature-detect each one
+(`store.findActiveRun?.(...)`) and degrade gracefully when it is absent, and
+the conformance suite (below) skips a method's test cases when a backend
+omits it. Implement the ones your app needs:
+
+- Skip `findActiveRun` and a client that reloads (or switches back to) a
+  still-generating thread restores the transcript but never resumes the live
+  reply, because `reconstructChat` always reports `activeRun: null`.
+- Skip `listByThread` and you cannot render a thread's past runs.
+- Skip `listReclaimable` and you have no way to query abandoned runs, but
+  nothing in the framework depends on it: there is no built-in reaper, and
+  `detachedSince` is a field you set yourself when a viewer detaches, not one
+  the framework populates.
+
+The reference implementation, `MemoryRunStore` in
+`packages/ai-persistence/src/memory.ts`, implements all six. The
+`examples/ts-react-chat` SQLite adapter (`src/lib/sqlite-persistence.ts`)
+implements only the three required methods plus `findActiveRun`, which is a
+fine illustration that the rest stay optional.
 
 ### InterruptStore
 
