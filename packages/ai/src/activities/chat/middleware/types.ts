@@ -398,6 +398,18 @@ export interface AbortInfo {
   reason?: string
   /** Duration until abort in milliseconds */
   duration: number
+  /**
+   * True only when the abort came from an explicit, out-of-band cancel (e.g. a
+   * cancel endpoint setting `RunRecord.cancelRequested`), never from a mere
+   * client disconnect.
+   *
+   * A disconnect and a user pressing "stop" are the SAME connection close on
+   * the wire, so consumers must not infer intent from an abort alone. Middleware
+   * that tears down expensive resources reads this to distinguish "the viewer
+   * left, keep going" from "the user wants this stopped". Populated in a later
+   * phase; always `undefined` today.
+   */
+  cancelRequested?: boolean
 }
 
 /**
