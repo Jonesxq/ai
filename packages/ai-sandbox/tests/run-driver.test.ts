@@ -40,6 +40,29 @@ async function* throwing(): AsyncGenerator<StreamChunk> {
   throw new Error('provider exploded')
 }
 
+/** Build a `RUN_ERROR` chunk, mirroring `syntheticRunError` in `src/run.ts`. */
+function runErrorChunk(message: string): StreamChunk {
+  const chunk: { type: EventType.RUN_ERROR; message: string } = {
+    type: EventType.RUN_ERROR,
+    message,
+  }
+  return chunk
+}
+
+async function* chunkThenRunError(): AsyncGenerator<StreamChunk> {
+  yield textChunk('partial')
+  yield runErrorChunk('provider rejected the request')
+}
+
+/** Aborts `controller` between the first and second yielded chunk. */
+async function* abortAfterFirstChunk(
+  controller: AbortController,
+): AsyncGenerator<StreamChunk> {
+  yield textChunk('before-abort')
+  controller.abort()
+  yield textChunk('after-abort')
+}
+
 /** Replay a finished run's log from the start and collect every chunk. */
 async function replay(runId: string): Promise<Array<StreamChunk>> {
   const chunks: Array<StreamChunk> = []
@@ -103,6 +126,47 @@ describe('pipeToRunLog', () => {
     })
     expect(record.status).toBe('aborted')
   })
+
+  it('finishes failed on a RUN_ERROR chunk, capturing its message and logging the event', async () => {
+    const runs = new InMemoryRunStore()
+    const durability = memoryStream(producerRequest('r6'))
+    const record = await pipeToRunLog(chunkThenRunError(), {
+      runs,
+      durability,
+      runId: 'r6',
+      threadId: 't1',
+    })
+
+    expect(record.status).toBe('failed')
+    expect(record.error).toBe('provider rejected the request')
+
+    const events = await replay('r6')
+    expect(events.some((chunk) => chunk.type === EventType.RUN_ERROR)).toBe(
+      true,
+    )
+  })
+
+  it('finishes aborted mid-stream, keeping chunks appended before the abort replayable', async () => {
+    const runs = new InMemoryRunStore()
+    const durability = memoryStream(producerRequest('r7'))
+    const controller = new AbortController()
+    const record = await pipeToRunLog(abortAfterFirstChunk(controller), {
+      runs,
+      durability,
+      runId: 'r7',
+      threadId: 't1',
+      signal: controller.signal,
+    })
+
+    expect(record.status).toBe('aborted')
+
+    const deltas: Array<string> = []
+    for (const chunk of await replay('r7')) {
+      if (chunk.type === EventType.TEXT_MESSAGE_CONTENT)
+        deltas.push(chunk.delta)
+    }
+    expect(deltas).toEqual(['before-abort'])
+  })
 })
 
 describe('RunController', () => {
@@ -127,5 +191,24 @@ describe('RunController', () => {
     controller.start({ runId: 'r5', threadId: 't1', stream: twoChunks() })
     await controller.drain()
     expect((await controller.status('r5'))?.status).toBe('completed')
+  })
+
+  it("attach replays from an opaque offset (memoryStream's '-1' from-start sentinel)", async () => {
+    const runs = new InMemoryRunStore()
+    const durability = memoryStream(producerRequest('r8'))
+    const controller = new RunController({ runs, durability })
+    const handle = controller.start({
+      runId: 'r8',
+      threadId: 't1',
+      stream: twoChunks(),
+    })
+    await handle.done
+
+    const deltas: Array<string> = []
+    for await (const event of controller.attach('-1')) {
+      if (event.chunk.type === EventType.TEXT_MESSAGE_CONTENT)
+        deltas.push(event.chunk.delta)
+    }
+    expect(deltas).toEqual(['hello ', 'world'])
   })
 })

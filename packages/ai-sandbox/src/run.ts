@@ -138,6 +138,14 @@ export interface RunHandle {
  * {@link pipeToRunLog}, tail it from a cursor, and `drain()` all in-flight runs
  * (e.g. inside a `ctx.waitUntil`). Holds no run state of its own beyond the set
  * of currently in-flight `done` promises.
+ *
+ * A single instance holds one `durability`, and a {@link StreamDurability} is
+ * bound to one run (e.g. `memoryStream(request)` resolves its `runId` from the
+ * request). Concurrent `start()` calls therefore drive at most one run safely
+ * at a time: parallel runs would interleave chunks into the same log, and
+ * whichever run terminates first calls `durability.close()` and terminalizes
+ * the others' log too. Safe concurrency would require a per-run `durability`;
+ * that is left to a later phase.
  */
 export class RunController {
   private readonly inFlight = new Set<Promise<RunRecord>>()
@@ -173,7 +181,11 @@ export class RunController {
     return this.deps.runs.get(runId)
   }
 
-  /** Await every currently in-flight run's `done` promise. */
+  /**
+   * Await every currently in-flight run's `done` promise. Safe today because
+   * this controller drives one run at a time (see the class doc); it does not
+   * imply multiple concurrent runs are isolated from one another.
+   */
   async drain(): Promise<void> {
     await Promise.all([...this.inFlight])
   }
