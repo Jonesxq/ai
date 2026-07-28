@@ -124,6 +124,7 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
   private queuedSnapshotSignature: string | undefined
   private resumePersistenceError: Error | undefined = undefined
   private abortController: AbortController | null = null
+  private rejoinedRunId: string | undefined
   private readonly callbacksRef: VideoCallbacks<TOutput>
   private devtoolsMounted = false
   private disposed = false
@@ -852,6 +853,9 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
     // observed since construction.
     if (this.resumeSnapshot || this.isLoading || this.status !== 'idle') return
     this.repaintFromSnapshot(snapshot)
+    if (snapshot.status === 'running' && snapshot.resumeState?.runId) {
+      this.rejoinInFlight(snapshot.resumeState.runId)
+    }
   }
 
   /**
@@ -881,6 +885,46 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
       if (this.resumeSnapshot || this.isLoading || this.status !== 'idle')
         return
       this.repaintFromSnapshot(snapshot)
+      if (res.activeRun?.runId) {
+        this.rejoinInFlight(res.activeRun.runId)
+      }
+    })()
+  }
+
+  /**
+   * Re-attach to a video run still generating and stream it to completion,
+   * mirroring the chat client's mount-time rejoin. Reuses `processStream`, so
+   * the job status and result repaint from the replayed chunks. A live
+   * `generate()` owns the client and is never stomped; a run is rejoined once.
+   */
+  private rejoinInFlight(runId: string): void {
+    const joinRun = this.connection?.joinRun
+    if (!joinRun) return
+    if (this.rejoinedRunId === runId) return
+    if (this.isLoading || this.abortController) return
+    this.rejoinedRunId = runId
+    const controller = new AbortController()
+    this.abortController = controller
+    this.setIsLoading(true)
+    this.setStatus('generating')
+    void (async () => {
+      try {
+        await this.processStream(joinRun(runId, controller.signal), runId, controller.signal)
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          this.recordResumeSnapshotError(
+            error instanceof Error ? error : new Error(String(error)),
+          )
+        }
+      } finally {
+        // Only reset if this rejoin still owns the client: a `stop()` +
+        // fresh `generate()` may have replaced the controller while the tail
+        // was settling, and that live run owns `isLoading` now.
+        if (this.abortController === controller) {
+          this.abortController = null
+          this.setIsLoading(false)
+        }
+      }
     })()
   }
 

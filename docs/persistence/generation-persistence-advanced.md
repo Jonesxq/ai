@@ -5,27 +5,10 @@ id: generation-persistence-advanced
 
 # Generation Persistence: Advanced
 
-The deeper parts of [Generation persistence](./generation-persistence):
-reconnecting a stream that is still running, the in-flight `resumeState`, seeding
-state yourself, securing the hydration endpoint, and exactly what the record
-holds. Start with the main guide; come here when you need one of these.
-
-## Reconnect to a run that is still streaming
-
-The server-driven endpoint in the main guide already wires this: a `durability`
-adapter on `toServerSentEventsResponse`, plus a `GET` that replays the run from
-the log when the request carries a resume cursor. On the client there is nothing
-to add. A connection dropped mid-generation re-attaches on its own through
-`fetchServerSentEvents` or `fetchHttpStream`, the same adapters `useChat` uses.
-In production, swap `memoryStream` for `durableStream` from
-`@tanstack/ai-durable-stream`, where requests span processes.
-
-A full page reload is different: the hooks never start or resume a run on mount,
-and the record alone cannot re-attach to the stream. It records that a run was
-in flight, not a stream position. After a reload, a non-null `resumeState` is
-informational: "a run was still going when the page closed." See
-[Resumable Streams](../resumable-streams/overview) for the durability contract,
-production adapters, and the one-time-side-effects note.
+The deeper parts of [Generation persistence](./generation-persistence): the
+in-flight `resumeState`, seeding state yourself, securing the hydration endpoint,
+and exactly what the record holds. Start with the main guide; come here when you
+need one of these.
 
 ## The in-flight `resumeState`
 

@@ -1529,6 +1529,56 @@ describe('GenerationClient', () => {
       )
     })
 
+    it('rejoins an in-flight run from a stored running snapshot', async () => {
+      const runId = 'run-stored-live'
+      const { persistence } = createMapPersistence({
+        'generation:hero': {
+          schemaVersion: 1,
+          resumeState: { threadId: 'hero', runId },
+          status: 'running',
+        },
+      })
+      const chunks: Array<StreamChunk> = [
+        {
+          type: EventType.RUN_STARTED,
+          runId,
+          threadId: 'hero',
+          timestamp: Date.now(),
+        },
+        {
+          type: EventType.CUSTOM,
+          name: 'generation:result',
+          value: {
+            id: 'stored-img',
+            model: 'test-image',
+            images: [{ url: '/stored.png' }],
+          },
+          timestamp: Date.now(),
+        },
+        {
+          type: EventType.RUN_FINISHED,
+          runId,
+          threadId: 'hero',
+          timestamp: Date.now(),
+        },
+      ]
+      const joinRun = vi.fn(async function* () {
+        for (const chunk of chunks) yield chunk
+      })
+      const client = new GenerationClient({
+        id: 'hero',
+        connection: { async *connect() {}, joinRun },
+        persistence,
+      })
+
+      await waitForCondition(() => {
+        expect(client.getStatus()).toBe('success')
+        expect(client.getResult()).toMatchObject({ id: 'stored-img' })
+      })
+      expect(joinRun).toHaveBeenCalledWith(runId, expect.anything())
+      expect(client.getIsLoading()).toBe(false)
+    })
+
     it('repaints status/result from a stored complete image snapshot via reconstructResult', async () => {
       const snapshot: GenerationResumeSnapshot = {
         schemaVersion: 1,
@@ -1946,6 +1996,57 @@ describe('GenerationClient', () => {
       })
       expect(client.getStatus()).toBe('success')
       expect(onResumeStateChange).toHaveBeenLastCalledWith(null)
+    })
+
+    it('rejoins an in-flight run reported by the server and finishes it in place', async () => {
+      const runId = 'run-live-1'
+      const chunks: Array<StreamChunk> = [
+        {
+          type: EventType.RUN_STARTED,
+          runId,
+          threadId: 'thread-live',
+          timestamp: Date.now(),
+        },
+        {
+          type: EventType.CUSTOM,
+          name: 'generation:result',
+          value: {
+            id: 'live-img',
+            model: 'test-image',
+            images: [{ url: '/live.png' }],
+          },
+          timestamp: Date.now(),
+        },
+        {
+          type: EventType.RUN_FINISHED,
+          runId,
+          threadId: 'thread-live',
+          timestamp: Date.now(),
+        },
+      ]
+      const joinRun = vi.fn(async function* () {
+        for (const chunk of chunks) yield chunk
+      })
+      const hydrateGeneration = vi.fn(async () => ({
+        resumeSnapshot: {
+          schemaVersion: 1 as const,
+          resumeState: { threadId: 'thread-live', runId },
+          status: 'running' as const,
+        },
+        activeRun: { runId },
+      }))
+      const client = new GenerationClient({
+        threadId: 'thread-live',
+        connection: { async *connect() {}, hydrateGeneration, joinRun },
+        persistence: true,
+      })
+
+      await waitForCondition(() => {
+        expect(client.getStatus()).toBe('success')
+        expect(client.getResult()).toMatchObject({ id: 'live-img' })
+      })
+      expect(joinRun).toHaveBeenCalledWith(runId, expect.anything())
+      expect(client.getIsLoading()).toBe(false)
     })
 
     it('does nothing when the connection exposes no hydrateGeneration', async () => {

@@ -751,6 +751,18 @@ export interface ConnectConnectionAdapter {
    * `hydrate` handler.
    */
   hydrateGeneration?: (threadId: string) => Promise<GenerationHydrationResult>
+  /**
+   * Re-attach to a run that is still generating and replay it from the start
+   * (read-only `?offset=-1&runId` against the delivery-durability log). The
+   * generation client tails this on mount when hydration reports a run still in
+   * flight, so a dropped connection or a full reload finishes the generation in
+   * place — the same durability replay the chat client uses. Optional and
+   * feature-detected; present on `fetchServerSentEvents` / `fetchHttpStream`.
+   */
+  joinRun?: (
+    runId: string,
+    abortSignal?: AbortSignal,
+  ) => AsyncIterable<StreamChunk>
 }
 
 /**

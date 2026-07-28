@@ -147,6 +147,14 @@ after a reload just as it did live. You never fetch or seed anything: the thread
 id is the stable key, and a reload or the same thread on another device follow
 the identical path.
 
+If a run is **still generating** when the connection drops or the page reloads,
+the client re-attaches to it and finishes it in place, exactly like `useChat`.
+The `durability` adapter on `toServerSentEventsResponse` plus the `GET` resume
+branch above are all it needs: on mount `reconstructGeneration` reports the live
+run and the client tails it through the durability log. In production, swap
+`memoryStream` for `durableStream` from `@tanstack/ai-durable-stream`, where
+requests span processes. See [Resumable Streams](../resumable-streams/overview).
+
 ## Client-driven: a storage adapter
 
 Pass a storage adapter instead, and give the hook a stable `id`. The client
