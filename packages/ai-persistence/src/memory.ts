@@ -107,9 +107,7 @@ class MemoryGenerationJobStore implements GenerationJobStore {
   get(jobId: string): Promise<GenerationJobRecord | null> {
     return Promise.resolve(this.jobs.get(jobId) ?? null)
   }
-  findLatestForThread(
-    threadId: string,
-  ): Promise<GenerationJobRecord | null> {
+  findLatestForThread(threadId: string): Promise<GenerationJobRecord | null> {
     const linked = [...this.jobs.values()]
       .filter((job) => job.threadId === threadId)
       .sort((a, b) => b.startedAt - a.startedAt)

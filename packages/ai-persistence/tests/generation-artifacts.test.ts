@@ -292,7 +292,9 @@ describe('withGenerationPersistence generation artifacts', () => {
     expect(job?.result).toBeDefined()
     // Persisted artifact refs land on the job too.
     expect(job?.artifacts).toHaveLength(1)
-    expect(job?.artifacts?.[0]?.artifactId).toBe(result.artifacts![0]!.artifactId)
+    expect(job?.artifacts?.[0]?.artifactId).toBe(
+      result.artifacts![0]!.artifactId,
+    )
   })
 
   it('links the job to a thread and finds the latest for that thread', async () => {

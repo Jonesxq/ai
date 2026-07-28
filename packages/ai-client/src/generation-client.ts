@@ -719,7 +719,8 @@ export class GenerationClient<
       const snapshot = parseGenerationResumeSnapshot(res.resumeSnapshot)
       if (!snapshot) return
       // Re-check: a send may have started while the fetch was in flight.
-      if (this.resumeSnapshot || this.isLoading || this.status !== 'idle') return
+      if (this.resumeSnapshot || this.isLoading || this.status !== 'idle')
+        return
       this.resumeSnapshot = snapshot
       this.callbacksRef.onResumeSnapshotChange?.(snapshot)
     })()

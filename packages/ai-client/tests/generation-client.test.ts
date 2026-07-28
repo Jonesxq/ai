@@ -1784,9 +1784,7 @@ describe('GenerationClient', () => {
       activeRun: null,
     }
 
-    function createHydratingConnection(
-      result: GenerationHydrationResult,
-    ): {
+    function createHydratingConnection(result: GenerationHydrationResult): {
       connection: ConnectConnectionAdapter
       hydrateGeneration: ReturnType<typeof vi.fn>
     } {

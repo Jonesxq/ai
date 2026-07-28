@@ -32,10 +32,7 @@ const TINY_PNG_B64 =
 // Server-authoritative record of the last completed generation per thread. In
 // production this is a `GenerationJobStore` row; here a process-lifetime map is
 // enough for the reload round-trip (the e2e server stays up across reloads).
-const completedByThread = new Map<
-  string,
-  { id: string; model: string }
->()
+const completedByThread = new Map<string, { id: string; model: string }>()
 
 function stringField(body: unknown, key: string): string | undefined {
   if (typeof body !== 'object' || body === null || !(key in body)) {
@@ -73,7 +70,10 @@ function imageRun(threadId: string, runId: string): AsyncIterable<StreamChunk> {
     } as StreamChunk
     // The run finished: record the job the way `withGenerationPersistence`
     // would, so the GET hydrate below can restore it after a reload.
-    completedByThread.set(threadId, { id: 'image-1', model: 'mock-image-model' })
+    completedByThread.set(threadId, {
+      id: 'image-1',
+      model: 'mock-image-model',
+    })
   })()
 }
 

@@ -42,23 +42,23 @@ drives them, an in-memory reference backend, and a conformance testkit. It does
 stores against whatever you already run — Postgres, SQLite, D1, Mongo — and hand
 the result to `withPersistence`. The core never inspects your tables.
 
-| Ships in the package                                                        | What it is                                             |
-| --------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `MessageStore` / `RunStore` / `InterruptStore` / `MetadataStore`            | The four **chat** state contracts                      |
-| `GenerationJobStore` / `ArtifactStore` / `BlobStore`                        | The **generation** contracts (job lifecycle + bytes)   |
-| `withPersistence` / `withGenerationPersistence`                             | Chat + generation middleware                           |
+| Ships in the package                                                        | What it is                                                  |
+| --------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `MessageStore` / `RunStore` / `InterruptStore` / `MetadataStore`            | The four **chat** state contracts                           |
+| `GenerationJobStore` / `ArtifactStore` / `BlobStore`                        | The **generation** contracts (job lifecycle + bytes)        |
+| `withPersistence` / `withGenerationPersistence`                             | Chat + generation middleware                                |
 | `memoryPersistence()`                                                       | In-process reference backend, all seven stores (dev, tests) |
-| `reconstructChat` / `reconstructGeneration`                                 | Server hydrate route helpers (chat / generation)       |
-| `retrieveArtifact` / `retrieveBlob` / `artifactBlobKey`                     | Serve persisted generation-media bytes back            |
-| `LockStore` / `withLocks` / `InMemoryLockStore` (from `@tanstack/ai/locks`) | Coordination, **not** this package — see ai-core/locks |
-| `@tanstack/ai-persistence/testkit`                                          | `runPersistenceConformance` gate (chat state stores)   |
+| `reconstructChat` / `reconstructGeneration`                                 | Server hydrate route helpers (chat / generation)            |
+| `retrieveArtifact` / `retrieveBlob` / `artifactBlobKey`                     | Serve persisted generation-media bytes back                 |
+| `LockStore` / `withLocks` / `InMemoryLockStore` (from `@tanstack/ai/locks`) | Coordination, **not** this package — see ai-core/locks      |
+| `@tanstack/ai-persistence/testkit`                                          | `runPersistenceConformance` gate (chat state stores)        |
 
 **Chat vs generation stores.** Chat persistence keys on `threadId` and uses
 `messages` + optional `runs` / `interrupts` / `metadata`. Generation persistence
 keys on `jobId` and uses `jobs` (required by `withGenerationPersistence`) plus an
 optional `artifacts` + `blobs` **pair** — provide both or neither — to store the
 generated media bytes at blob key `artifacts/<runId>/<artifactId>`. `threadId` on
-a generation is only an optional *link* to a chat, never the job's identity. To
+a generation is only an optional _link_ to a chat, never the job's identity. To
 build the R2/D1-backed byte stores for a Worker, see
 **ai-persistence/build-cloudflare-artifact-store**.
 
@@ -75,13 +75,13 @@ Adding persistence to an app? Pick the recipe that matches what it already
 runs — each one writes a single `chat-persistence.ts` against the app's
 existing database client and schema:
 
-| The app runs...                                          | Read                                                   |
-| -------------------------------------------------------- | ------------------------------------------------------ |
-| Drizzle ORM (SQLite / Postgres / MySQL)                  | ai-persistence/build-drizzle-adapter/SKILL.md          |
-| Prisma                                                   | ai-persistence/build-prisma-adapter/SKILL.md           |
-| Cloudflare Workers + D1 (± Durable Object locks)         | ai-persistence/build-cloudflare-adapter/SKILL.md       |
-| Cloudflare Workers + R2/D1 for generated media bytes     | ai-persistence/build-cloudflare-artifact-store/SKILL.md |
-| Anything else — raw `pg`, Kysely, SQLite, Mongo          | ai-persistence/build-custom-adapter/SKILL.md           |
+| The app runs...                                      | Read                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------- |
+| Drizzle ORM (SQLite / Postgres / MySQL)              | ai-persistence/build-drizzle-adapter/SKILL.md           |
+| Prisma                                               | ai-persistence/build-prisma-adapter/SKILL.md            |
+| Cloudflare Workers + D1 (± Durable Object locks)     | ai-persistence/build-cloudflare-adapter/SKILL.md        |
+| Cloudflare Workers + R2/D1 for generated media bytes | ai-persistence/build-cloudflare-artifact-store/SKILL.md |
+| Anything else — raw `pg`, Kysely, SQLite, Mongo      | ai-persistence/build-custom-adapter/SKILL.md            |
 
 ## State persistence has two halves
 

@@ -32,7 +32,9 @@ test.describe('generation persistence (server-driven)', () => {
 
     // Server-driven mode writes NOTHING to browser storage — the record lives
     // on the server. No localStorage key mentions the generation id.
-    const localKeys = await page.evaluate(() => Object.keys(window.localStorage))
+    const localKeys = await page.evaluate(() =>
+      Object.keys(window.localStorage),
+    )
     expect(localKeys.some((k) => k.includes('generation-server'))).toBe(false)
 
     // Reload with empty client storage: the snapshot is restored purely from
