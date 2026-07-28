@@ -846,7 +846,11 @@ export class GenerationClient<
     this.setStatus('generating')
     void (async () => {
       try {
-        await this.processStream(joinRun(runId, controller.signal), runId, controller.signal)
+        await this.processStream(
+          joinRun(runId, controller.signal),
+          runId,
+          controller.signal,
+        )
       } catch (error) {
         if (!controller.signal.aborted) {
           this.recordResumeSnapshotError(
