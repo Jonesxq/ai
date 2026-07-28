@@ -61,12 +61,13 @@ export async function POST(request: Request) {
 - The backend must return a non-empty `Stream-Next-Offset` header on create,
   append, and close. A missing header fails loudly. The adapter never guesses an
   offset.
-- `durableStream` rejects a caller-supplied `append(chunks, { offsets })`: its
-  offset embeds a backend-assigned cursor, so it does not support
-  caller-supplied offsets and throws before creating anything rather than
-  honoring a caller's choice. See
-  [Custom Durability Adapter](./custom-adapter#handling-caller-supplied-offsets)
-  for adapters that can support it.
+- `durableStream` returns a plain `StreamDurability`. Its offsets embed a
+  backend-assigned cursor, so a caller cannot choose one, and the adapter has no
+  `upsert` to re-persist a range at offsets it did not mint. Code that requires
+  `UpsertableStreamDurability` fails to compile at the wiring site rather than at
+  run time. See
+  [Re-persisting a stored range](./custom-adapter#re-persisting-a-stored-range)
+  for adapters that can offer it.
 
 ## Attaching to a run by id
 
@@ -185,13 +186,14 @@ the `id` of an NDJSON `{ id, chunk }` envelope). For every appended batch:
 Core never derives an offset from an array index and never stamps one onto the
 `StreamChunk`.
 
-`append` also takes an optional `{ offsets }`: pass it and the call becomes an
-idempotent upsert, appending the same chunk at the same offset twice leaves
-one entry instead of two. Most integrations never need this; it exists for
-callers that pick their own offsets. `memoryStream` supports it, `durableStream`
-rejects it (see above). See
-[Custom Durability Adapter](./custom-adapter#handling-caller-supplied-offsets)
-to build your own.
+A caller that restarts and replays a range it already streamed needs those
+writes to land on the entries they already occupy instead of duplicating them.
+An adapter that can do that adds an `upsert` method and types itself
+`UpsertableStreamDurability`; one that cannot leaves the method out, so code
+requiring the capability does not compile against it. Most integrations never
+ask for it. `memoryStream` offers it, `durableStream` does not (see above). See
+[Re-persisting a stored range](./custom-adapter#re-persisting-a-stored-range) to
+build your own.
 
 ## Cloudflare Durable Streams
 

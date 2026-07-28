@@ -24,7 +24,7 @@ hand it. You implement four methods:
 | Method | Job |
 | --- | --- |
 | `resumeFrom()` | Return the resume offset from this request, or `null` for a fresh run. |
-| `append(chunks, opts)` | Persist a batch before delivery; return one offset per chunk, in order. See [Handling caller-supplied offsets](#handling-caller-supplied-offsets) for `opts.offsets`. |
+| `append(chunks)` | Persist a batch before delivery; return one offset per chunk, in order. |
 | `read(offset, signal)` | Replay chunks strictly after `offset`. |
 | `close()` | Mark the run complete and wake any parked readers. |
 
@@ -46,10 +46,6 @@ Get these wrong and resume breaks in subtle ways:
   stops the wait.
 - You do not handle ordering or append-before-deliver. Core buffers, calls
   `append`, and only forwards a chunk once you return its offset.
-- **`append` takes an optional second argument, `opts.offsets`.** Ignoring it
-  silently is the one broken choice: it type-checks but throws away the
-  idempotency the parameter exists for. See
-  [Handling caller-supplied offsets](#handling-caller-supplied-offsets).
 
 ## Implement it
 
@@ -62,16 +58,8 @@ import type { StreamChunk, StreamDurability } from '@tanstack/ai'
 
 // Your backend, one append-only log per run. Back it with Redis Streams, a
 // Postgres table, a queue. Anything that returns a stable cursor per entry.
-// `upsert` writes at caller-chosen cursors, replacing rather than duplicating
-// an entry that already exists at that cursor (a Postgres
-// `INSERT ... ON CONFLICT (cursor) DO UPDATE`, or a Redis `XADD` with an
-// explicit, deduplicated ID).
 interface RunLog {
   append: (chunks: Array<StreamChunk>) => Promise<Array<string>>
-  upsert: (
-    chunks: Array<StreamChunk>,
-    cursors: Array<string>,
-  ) => Promise<Array<string>>
   readAfter: (
     cursor: string | null,
   ) => Promise<Array<{ cursor: string; chunk: StreamChunk }>>
@@ -104,8 +92,7 @@ export function customDurability(
 
   return {
     resumeFrom: () => resume,
-    append: (chunks, opts) =>
-      opts?.offsets ? log.upsert(chunks, opts.offsets) : log.append(chunks),
+    append: (chunks) => log.append(chunks),
     close: () => log.markComplete(),
     read: async function* (offset, signal) {
       // '-1' / 'now' are the from-start / from-tail join sentinels.
@@ -148,42 +135,99 @@ export async function POST(request: Request) {
 For NDJSON, swap `toServerSentEventsResponse` for `toHttpResponse`. The adapter
 is identical; only the wire encoding changes.
 
-## Handling caller-supplied offsets
+## Re-persisting a stored range
 
-A caller can invoke `append(chunks, { offsets })` with offsets it chose itself
-instead of letting your adapter assign them. You have two honest options:
+A run driver that restarts mid-run re-derives its position from its own source
+and replays the range it had already streamed. If each replayed chunk lands as a
+fresh entry, the log ends up holding that overlap twice and a resuming client
+replays it twice. Writing a replayed chunk back at the offset it already carries
+is what keeps the log stable across a restart.
 
-**Upsert**, if your store can write at a caller-chosen key: appending the same
-chunk at the same offset twice must leave one entry, not two. That is what
-`log.upsert` does in the example above, and what `memoryStream` does
-internally.
+That capability is a separate method, `upsert`. Implement it and your adapter is
+an `UpsertableStreamDurability`; leave it out and it is a plain
+`StreamDurability`. Absence is the honest signal: a consumer that needs the
+capability asks for `UpsertableStreamDurability`, so a mismatch is a compile
+error at the wiring site rather than a failure buried in a run log. Offer it
+only if your store can write at a key the caller chose, such as a Postgres
+`INSERT ... ON CONFLICT (cursor) DO UPDATE` or a Redis `XADD` with an explicit,
+deduplicated ID. A store that stamps its own cursor on every write cannot, so it
+just does not expose `upsert`, which is the choice `durableStream` makes.
+`memoryStream` does expose it.
 
-**Reject**, if your store assigns its own cursor on write and can't honor a
-caller's choice. This is what `durableStream` does: its offsets embed a
-backend-assigned cursor, so it does not support caller-supplied offsets and
-throws before creating anything rather than silently dropping the caller's
-intent.
+Each entry pairs a chunk with the offset it belongs at, so nothing has to be
+lined up by position. Validate the entire batch before touching stored state, so
+a rejected call never leaves part of it applied:
 
-```ts ignore
-// async so the rejection is a rejected promise, not a synchronous throw:
-// append is declared to return a Promise, so callers must be able to
-// .catch() every failure mode.
-append: async (chunks, opts) => {
-  if (opts?.offsets) {
-    throw new Error('this adapter does not support caller-supplied offsets')
+- reject an offset you did not mint yourself, because every offset you minted is
+  resumable by definition;
+- reject an offset that repeats inside one batch;
+- require a not-yet-stored offset to sit after the current tail. A caller
+  replaying an overlap therefore has to replay a contiguous suffix, and cannot
+  write into a position it skipped earlier.
+
+```ts
+import type { StreamChunk, UpsertableStreamDurability } from '@tanstack/ai'
+
+// Your backend, plus the one operation `upsert` needs beyond `append`: a write
+// at a cursor you supply that replaces whatever is already stored there.
+interface UpsertableRunLog {
+  tailSeq: () => Promise<number>
+  hasOffset: (offset: string) => Promise<boolean>
+  write: (
+    entries: Array<{ chunk: StreamChunk; offset: string }>,
+  ) => Promise<Array<string>>
+}
+
+// Offsets here are `${runId}:${seq}`. Yours can be any format you can decode
+// back into a run id and a position.
+function decodeSeq(runId: string, offset: string, index: number): number {
+  const prefix = `${runId}:`
+  const seq = offset.startsWith(prefix)
+    ? Number(offset.slice(prefix.length))
+    : Number.NaN
+  if (!Number.isSafeInteger(seq) || seq < 1) {
+    throw new Error(
+      `entries[${index}].offset ${JSON.stringify(offset)} was not minted by this run`,
+    )
   }
-  return log.append(chunks)
-},
+  return seq
+}
+
+// The returned function is `async`, so every rejection reaches the caller as a
+// rejected promise rather than a synchronous throw.
+export function makeUpsert(
+  log: UpsertableRunLog,
+  runId: string,
+): UpsertableStreamDurability['upsert'] {
+  return async (entries) => {
+    let tail = await log.tailSeq()
+    const seen = new Set<string>()
+    for (const [index, entry] of entries.entries()) {
+      const seq = decodeSeq(runId, entry.offset, index)
+      if (seen.has(entry.offset)) {
+        throw new Error(
+          `entries[${index}].offset ${JSON.stringify(entry.offset)} is repeated in this batch`,
+        )
+      }
+      seen.add(entry.offset)
+      if (await log.hasOffset(entry.offset)) continue
+      if (seq <= tail) {
+        throw new Error(
+          `entries[${index}].offset ${JSON.stringify(entry.offset)} is not stored yet but claims position ${seq}, at or before the tail ${tail}`,
+        )
+      }
+      tail = seq
+    }
+    // Every entry passed, so the write below cannot reject partway and leave a
+    // prefix of the batch applied.
+    return log.write(entries)
+  }
+}
 ```
 
-Either is fine. The one broken choice is accepting `opts.offsets` in the
-signature and then ignoring it: the call type-checks, but the idempotency the
-caller asked for silently disappears.
-
-When you do implement the upsert, the contract requires `opts.offsets` to be
-the same length as `chunks`, one offset per chunk in order, same as the
-return value. `memoryStream` validates this defensively and throws on a
-mismatch; do the same in your own adapter rather than trusting the caller.
+Hand that to the adapter as `upsert: makeUpsert(log, runId)` alongside the four
+methods above, and annotate the result `UpsertableStreamDurability` so the extra
+capability shows up in the type.
 
 ## Type your offsets (optional)
 

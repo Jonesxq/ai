@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS runs (
   started_at integer NOT NULL,
   finished_at integer,
   error text,
+  error_code text,
   usage_json text,
   sandbox_key text,
   detached_since integer,
@@ -184,7 +185,22 @@ function mapRun(row: Record<string, unknown>): RunRecord {
     status: toRunStatus(row.status),
     startedAt: Number(row.started_at),
     ...(row.finished_at != null ? { finishedAt: Number(row.finished_at) } : {}),
-    ...(typeof row.error === 'string' ? { error: row.error } : {}),
+    // `error` is a `RunError`: the provider's prose in `error`, its stable
+    // classification in `error_code`. Two columns rather than one JSON blob,
+    // because `code` is the field an operator filters and groups by
+    // (`WHERE error_code = 'rate_limited'`), and this schema keeps the `_json`
+    // suffix for columns that really hold serialized JSON. Omit `code` when the
+    // column is NULL so the record matches an error that carried no code.
+    ...(typeof row.error === 'string'
+      ? {
+          error: {
+            message: row.error,
+            ...(typeof row.error_code === 'string'
+              ? { code: row.error_code }
+              : {}),
+          },
+        }
+      : {}),
     ...(typeof row.usage_json === 'string'
       ? { usage: JSON.parse(row.usage_json) }
       : {}),
@@ -234,7 +250,7 @@ function createRunStore(db: DatabaseSync) {
     },
     async update(runId, patch) {
       const sets: Array<string> = []
-      const params: Array<string | number> = []
+      const params: Array<string | number | null> = []
       if (patch.status !== undefined) {
         sets.push('status = ?')
         params.push(patch.status)
@@ -244,8 +260,10 @@ function createRunStore(db: DatabaseSync) {
         params.push(patch.finishedAt)
       }
       if (patch.error !== undefined) {
-        sets.push('error = ?')
-        params.push(patch.error)
+        // Write both halves together, so a later failure that carries no `code`
+        // cannot leave the previous failure's code behind.
+        sets.push('error = ?', 'error_code = ?')
+        params.push(patch.error.message, patch.error.code ?? null)
       }
       if (patch.usage !== undefined) {
         sets.push('usage_json = ?')
@@ -575,8 +593,11 @@ runPersistenceConformance('my sqlite adapter', () =>
 )
 ```
 
-The adapter above provides all four stores, so there is nothing to declare. A
-partial adapter lists what it deliberately omits:
+The adapter above provides all four stores and all six `runs` methods, so there
+is nothing to declare. Most adapters are less complete than that, and every
+omission has to be declared, in one of two places.
+
+A store you deliberately do not provide goes in `skip`:
 
 ```ts
 import { runPersistenceConformance } from '@tanstack/ai-persistence/testkit'
@@ -589,11 +610,32 @@ runPersistenceConformance(
 )
 ```
 
-`skip` accepts only the four state store keys. A store that is absent and not
-listed fails the suite loudly, so you cannot ship a half-wired adapter by
-accident. When this is green, your adapter is a drop-in for `withPersistence`.
-The `examples/ts-react-chat` app runs exactly this test against its SQLite
-backend.
+An optional `RunStore` method you do not implement goes in `skipMethods`, keyed
+`runs.<method>`:
+
+```ts
+import { runPersistenceConformance } from '@tanstack/ai-persistence/testkit'
+// A leaner build of the SQLite adapter: all four stores, but only the three
+// required `runs` methods plus `findActiveRun`.
+import { leanSqlitePersistence } from './lean-sqlite-persistence'
+
+// Nothing renders a thread's past runs here and there is no reaper, so
+// `listByThread` and `listReclaimable` are absent by choice. `findActiveRun` is
+// implemented, so it stays under test.
+runPersistenceConformance(
+  'lean sqlite adapter',
+  () => leanSqlitePersistence({ url: ':memory:', migrate: true }),
+  { skipMethods: ['runs.listByThread', 'runs.listReclaimable'] },
+)
+```
+
+`skip` accepts only the four state store keys, and `skipMethods` only the
+optional `runs` methods. Anything absent and not declared fails the suite with a
+message naming exactly what to add, so a half-wired adapter cannot report a
+pass, and a declared omission shows up in the test output as a skipped case
+rather than as nothing at all. When this is green, your adapter is a drop-in for
+`withPersistence`. The `examples/ts-react-chat` app runs this suite against its
+SQLite backend and declares those same two omissions.
 
 ## Let your coding agent write it
 
@@ -659,7 +701,7 @@ interface MessageStore {
 
 `RunStore` and `RunRecord` come from `@tanstack/ai`; `@tanstack/ai-persistence`
 re-exports both, which is why the samples on this page import them from either
-package.
+package. `RunError` is exported from `@tanstack/ai` only.
 
 ```ts
 import type { TokenUsage } from '@tanstack/ai'
@@ -667,13 +709,22 @@ import type { TokenUsage } from '@tanstack/ai'
 type TerminalRunStatus = 'completed' | 'failed' | 'aborted'
 type RunStatus = 'running' | 'interrupted' | TerminalRunStatus
 
+// Why a run failed. `message` is the provider's prose, which changes between
+// model versions and cannot be branched on; `code` is the stable
+// classification a consumer switches over to retry, escalate, or show a
+// specific UI. Providers do not always supply one, so `code` is optional.
+interface RunError {
+  message: string
+  code?: string
+}
+
 interface RunRecord {
   runId: string
   threadId: string
   status: RunStatus
   startedAt: number // epoch ms
   finishedAt?: number // epoch ms, set once the run reaches a terminal status
-  error?: string
+  error?: RunError
   usage?: TokenUsage // token counts, from @tanstack/ai
   sandboxKey?: string // sandbox this run is bound to, if it ran in one
   // Epoch ms since the last viewer detached. Nothing in the framework sets
@@ -733,8 +784,8 @@ implements only those three is a valid `RunStore`. `findActiveRun`,
 `listByThread`, and `listReclaimable` are genuinely optional, not
 recommended-but-checked: consumers feature-detect each one
 (`store.findActiveRun?.(...)`) and degrade gracefully when it is absent, and
-the conformance suite (below) skips a method's test cases when a backend
-omits it. Implement the ones your app needs:
+the conformance suite (below) skips a method's test cases once you declare the
+omission in `skipMethods`. Implement the ones your app needs:
 
 - Skip `findActiveRun` and a client that reloads (or switches back to) a
   still-generating thread restores the transcript but never resumes the live
@@ -744,6 +795,29 @@ omits it. Implement the ones your app needs:
   nothing in the framework depends on it: there is no built-in reaper, and
   `detachedSince` is a field you set yourself when a viewer detaches, not one
   the framework populates.
+
+Two helpers travel with the contract, and both exist so a caller does not have
+to reach for a cast:
+
+- Deciding "can this run still emit events?" from a bare `RunStatus` string
+  leaves you holding the wide union afterwards. `isTerminalRunStatus` is a type
+  predicate, so inside the guard the status is a `TerminalRunStatus` and can be
+  passed wherever one is required.
+
+  ```ts
+  import { isTerminalRunStatus } from '@tanstack/ai-persistence'
+  import type { RunRecord, TerminalRunStatus } from '@tanstack/ai-persistence'
+
+  function finalStatus(run: RunRecord): TerminalRunStatus | null {
+    return isTerminalRunStatus(run.status) ? run.status : null
+  }
+  ```
+
+- An optional method you did implement should not need a `?.` from inside your
+  own code. `defineRunStore` is generic over the object you pass, so the result
+  keeps that object's exact shape: `createRunStore(db).findActiveRun(threadId)`
+  is a direct call on the store built above, while a consumer holding a bare
+  `RunStore` still feature-detects the same method.
 
 The reference implementation, `MemoryRunStore` in
 `packages/ai-persistence/src/memory.ts`, implements all six. The
