@@ -5,6 +5,7 @@ import {
   localStoragePersistence,
   useGenerateImage,
 } from '@tanstack/ai-react'
+import type { GenerationResumeSnapshot } from '@tanstack/ai-react'
 
 /**
  * Browser-refresh persistence harness for generation hooks (client half).
@@ -16,7 +17,7 @@ import {
  * provider-free endpoint is `/api/generation-persistence`.
  */
 
-const snapshots = localStoragePersistence()
+const snapshots = localStoragePersistence<GenerationResumeSnapshot>()
 const connection = fetchServerSentEvents('/api/generation-persistence')
 
 export const Route = createFileRoute('/generation-persistence')({
