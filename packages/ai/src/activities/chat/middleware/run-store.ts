@@ -5,7 +5,8 @@
  * `withPersistence`) and `@tanstack/ai-sandbox` (whose run driver records run
  * status). Living in core is what lets one `RunRecord` per run be shared by
  * both, instead of each package keeping its own and disagreeing. Same rationale
- * as `LockStore` and `SandboxInstanceStore`.
+ * as `LockStore` (`packages/ai/src/locks.ts`), which is likewise a
+ * coordination primitive that core owns so that no consumer package has to.
  */
 import type { TokenUsage } from '../../../types'
 
@@ -16,44 +17,102 @@ export type TerminalRunStatus = 'completed' | 'failed' | 'aborted'
  * Lifecycle status of one run (one agent turn within a conversation).
  *
  * `interrupted` is a human-in-the-loop PAUSE that interrupt-resume continues
- * from — it is deliberately NOT terminal, and must never be conflated with
- * `aborted` (an explicit cancellation).
+ * from — it is deliberately NOT terminal, and by design must never be
+ * conflated with `aborted` (an explicit cancellation).
+ *
+ * KNOWN DIVERGENCE (Phase 3, deliberate): `withPersistence` in
+ * `@tanstack/ai-persistence` does not honour that separation yet. Its
+ * `onAbort` writes `status: 'interrupted'` — plus a `finishedAt`, on a status
+ * documented here as non-terminal — for an abort, because Phase 1 has no way
+ * to tell a client disconnect from a real cancel (see `AbortInfo`'s
+ * `cancelRequested`, which nothing populates today). So a shipped
+ * `'interrupted'` record may mean either "paused for a human" or "the
+ * connection closed". Do NOT build a status UI that assumes otherwise until
+ * that middleware distinguishes the two.
  */
 export type RunStatus = 'running' | 'interrupted' | TerminalRunStatus
 
-const TERMINAL: ReadonlySet<RunStatus> = new Set<RunStatus>([
-  'completed',
-  'failed',
-  'aborted',
-])
+// A Record keyed by the union is exhaustiveness-checked: adding a member to
+// TerminalRunStatus is a compile error here until this map is updated. A
+// `Set<RunStatus>` would silently answer `false` for the new member instead.
+const TERMINAL: Record<TerminalRunStatus, true> = {
+  completed: true,
+  failed: true,
+  aborted: true,
+}
 
-/** Whether `status` means no further events will be appended. */
-export function isTerminalRunStatus(status: RunStatus): boolean {
-  return TERMINAL.has(status)
+/**
+ * Whether `status` means no further events will be appended. Narrows, so a
+ * caller inside the guard can pass `status` where a {@link TerminalRunStatus}
+ * is required without a cast.
+ */
+export function isTerminalRunStatus(
+  status: RunStatus,
+): status is TerminalRunStatus {
+  return status in TERMINAL
+}
+
+/**
+ * Why a run failed.
+ *
+ * A bare message is an LLM provider's prose: it changes between model
+ * versions and cannot be branched on. `code` is what a consumer switches over
+ * to decide whether to retry, escalate, or surface a specific UI.
+ */
+export interface RunError {
+  message: string
+  /** Stable, machine-branchable classification, when the provider supplies one. */
+  code?: string
 }
 
 /** Durable bookkeeping for a single run. */
 export interface RunRecord {
   runId: string
-  /** Conversation this run belongs to — the `Scope.threadId`. */
+  /**
+   * Conversation this run belongs to — the `Scope.threadId`.
+   *
+   * Generation jobs (a one-shot `generate()` with no conversation) must not
+   * reuse this record by faking `threadId = requestId`; they need a separate
+   * job store. `withGenerationPersistence` currently does exactly that and
+   * labels itself a stopgap — do not copy it.
+   */
   threadId: string
   status: RunStatus
   startedAt: number
   finishedAt?: number
-  error?: string
+  error?: RunError
   usage?: TokenUsage
   /**
-   * Compound sandbox key this run is bound to, when it ran in a sandbox. Lets a
-   * reclaimer find the sandbox to tear down without re-deriving the key.
+   * Compound sandbox key this run was bound to, when it ran in a sandbox.
+   * Recorded so a future reclaimer can identify the sandbox to tear down
+   * without re-deriving the key. Populated in a later phase; always
+   * `undefined` today.
    */
   sandboxKey?: string
-  /** Epoch ms when the last viewer detached; absent while someone is attached. */
+  /**
+   * Epoch ms when the last viewer detached; absent while someone is attached.
+   * Populated in a later phase; always `undefined` today.
+   */
   detachedSince?: number
-  /** Set by an explicit out-of-band cancel. The driver observes it and stops. */
+  /**
+   * Set by an explicit out-of-band cancel, to be distinguished from a mere
+   * client disconnect. Populated in a later phase; always `undefined` today —
+   * nothing in the repo reads it, so it is not yet a working cancel signal.
+   */
   cancelRequested?: boolean
 }
 
-/** Durable store for run lifecycle records. */
+/**
+ * Durable store for run lifecycle records.
+ *
+ * REQUIRED: `createOrResume`, `update`, `get`. Every backend must implement
+ * all three — they are what the persistence middleware calls unconditionally.
+ *
+ * OPTIONAL: `listByThread`, `listReclaimable`, `findActiveRun`. Each serves one
+ * higher-level feature (thread history, reclaim reaping, reattach-by-thread)
+ * and callers feature-detect them (`store.findActiveRun?.(threadId)`),
+ * degrading gracefully when a backend omits them.
+ */
 export interface RunStore {
   /**
    * Create a run record, or return the existing one unchanged if `runId` is
@@ -97,9 +156,11 @@ export interface RunStore {
    */
   listByThread?: (threadId: string) => Promise<Array<RunRecord>>
   /**
-   * Runs that are still `running`, have been detached since before
-   * `now - ttlMs`, and may therefore be reclaimed. OPTIONAL: only needed by a
-   * reaper. Consumers feature-detect.
+   * Runs that may be reclaimed: ALL THREE of `status === 'running'`,
+   * `detachedSince` is set, and `detachedSince <= now - ttlMs`. The cutoff is
+   * **inclusive** — a run detached at exactly `now - ttlMs` IS reclaimable.
+   *
+   * OPTIONAL: only needed by a reaper. Consumers feature-detect.
    */
   listReclaimable?: (opts: {
     now: number
@@ -124,8 +185,12 @@ export interface RunStore {
  * Type a {@link RunStore} implementation inline: pass the object and get
  * autocomplete plus contract checking with no separate annotation. Mirrors
  * `defineLock` / `defineSandboxInstanceStore`.
+ *
+ * The generic return preserves the argument's own type, so an optional method
+ * the implementation actually provides stays known-present on the result
+ * instead of collapsing back to `| undefined` on the interface.
  */
-export function defineRunStore(store: RunStore): RunStore {
+export function defineRunStore<const T extends RunStore>(store: T): T {
   return store
 }
 

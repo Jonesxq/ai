@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { InMemoryRunStore, isTerminalRunStatus } from '../src/index'
+import {
+  InMemoryRunStore,
+  defineRunStore,
+  isTerminalRunStatus,
+} from '../src/index'
+import type {
+  RunError,
+  RunRecord,
+  RunStore,
+  RunStatus,
+  TerminalRunStatus,
+} from '../src/index'
 
 describe('isTerminalRunStatus', () => {
   it('treats completed/failed/aborted as terminal and running/interrupted as not', () => {
@@ -9,6 +20,69 @@ describe('isTerminalRunStatus', () => {
     expect(isTerminalRunStatus('running')).toBe(false)
     // `interrupted` is a human-in-the-loop pause, NOT a terminal state.
     expect(isTerminalRunStatus('interrupted')).toBe(false)
+  })
+
+  it('narrows to TerminalRunStatus inside the guard', () => {
+    // The assignment below is the assertion: it only compiles if the predicate
+    // narrows `RunStatus` to `TerminalRunStatus`. A `boolean` return would make
+    // this a type error. Do not replace it with a runtime-only check.
+    const status: RunStatus = 'failed'
+    let terminal: TerminalRunStatus | undefined
+    if (isTerminalRunStatus(status)) {
+      terminal = status
+    }
+    expect(terminal).toBe('failed')
+  })
+})
+
+describe('RunError', () => {
+  it('carries a branchable code alongside the provider message', async () => {
+    const store = new InMemoryRunStore()
+    await store.createOrResume({ runId: 'r1', threadId: 't1', startedAt: 1 })
+
+    const error: RunError = {
+      message: 'the model refused the request',
+      code: 'content_filter',
+    }
+    await store.update('r1', { status: 'failed', finishedAt: 2, error })
+
+    const got = await store.get('r1')
+    expect(got?.error).toEqual(error)
+    // `code` is what a consumer switches over; the message is provider prose.
+    expect(got?.error?.code).toBe('content_filter')
+
+    // `code` is optional: a provider that supplies no classification still
+    // produces a valid record.
+    await store.update('r1', { error: { message: 'boom' } })
+    expect((await store.get('r1'))?.error).toEqual({ message: 'boom' })
+  })
+})
+
+describe('defineRunStore', () => {
+  it('preserves the implementation type so optional methods stay known-present', async () => {
+    const store = defineRunStore({
+      createOrResume: (input) =>
+        Promise.resolve({
+          runId: input.runId,
+          threadId: input.threadId,
+          startedAt: input.startedAt,
+          status: input.status ?? 'running',
+        } satisfies RunRecord),
+      update: () => Promise.resolve(),
+      get: () => Promise.resolve(null),
+      findActiveRun: (_threadId: string) =>
+        Promise.resolve<RunRecord | null>(null),
+    })
+
+    // The assertion is that this compiles WITHOUT `?.` or a feature-detect
+    // guard: `defineRunStore` must return the argument's own type, not the
+    // `RunStore` interface (on which `findActiveRun` is optional). If the
+    // signature regresses to `(store: RunStore): RunStore`, this line errors.
+    expect(await store.findActiveRun('t1')).toBeNull()
+
+    // Still assignable to the interface it implements.
+    const asInterface: RunStore = store
+    expect(typeof asInterface.createOrResume).toBe('function')
   })
 })
 
@@ -55,23 +129,75 @@ describe('InMemoryRunStore', () => {
     expect(listed.map((r) => r.runId)).toEqual(['b', 'a'])
   })
 
-  it('lists reclaimable runs: running, detached, past the ttl', async () => {
+  // `listReclaimable` must surface only runs where ALL THREE hold:
+  // `status === 'running'`, `detachedSince` is set, and
+  // `detachedSince <= now - ttlMs` (INCLUSIVE cutoff). Each fixture below pins
+  // exactly one of those conditions, mirroring the shared conformance suite in
+  // `packages/ai-persistence/src/testkit/conformance.ts`. Do NOT weaken this
+  // case — collapsing the fixtures, dropping the boundary run, or swapping the
+  // exact-set assertion for `toContain` is precisely the gap this case was
+  // written to close (the previous version passed even with the `status`
+  // check deleted and with `<=` flipped to `<`).
+  it('lists reclaimable runs: running, detached, at or past the ttl cutoff', async () => {
     const store = new InMemoryRunStore()
-    await store.createOrResume({ runId: 'stale', threadId: 't1', startedAt: 1 })
-    await store.update('stale', { detachedSince: 1_000 })
-    await store.createOrResume({ runId: 'fresh', threadId: 't1', startedAt: 1 })
-    await store.update('fresh', { detachedSince: 9_000 })
+    const now = 10_000
+    const ttlMs = 5_000
+    const cutoff = now - ttlMs // 5_000
+
+    // Included: running, detached well before the cutoff.
     await store.createOrResume({
-      runId: 'attached',
+      runId: 'included',
+      threadId: 't1',
+      startedAt: 1,
+    })
+    await store.update('included', { detachedSince: 1_000 })
+
+    // Included, BOUNDARY: detachedSince exactly equals the cutoff. Pins the
+    // inclusive `<=` — a strict `<` wrongly excludes this run.
+    await store.createOrResume({
+      runId: 'boundary',
+      threadId: 't1',
+      startedAt: 1,
+    })
+    await store.update('boundary', { detachedSince: cutoff })
+
+    // Excluded: detached one ms too recently. Pins the comparison itself — an
+    // implementation returning every detached run would include this.
+    await store.createOrResume({
+      runId: 'too-recent',
+      threadId: 't1',
+      startedAt: 1,
+    })
+    await store.update('too-recent', { detachedSince: cutoff + 1 })
+
+    // Excluded: detached long ago, but already terminal. Pins the
+    // `status === 'running'` check — dropping it would include this.
+    await store.createOrResume({
+      runId: 'terminal-detached',
+      threadId: 't1',
+      startedAt: 1,
+    })
+    await store.update('terminal-detached', {
+      detachedSince: 1_000,
+      status: 'completed',
+      finishedAt: 2_000,
+    })
+
+    // Excluded: running, but never detached. Pins the
+    // `detachedSince !== undefined` check — treating a missing value as 0 (or
+    // as "always reclaimable") would include this.
+    await store.createOrResume({
+      runId: 'never-detached',
       threadId: 't1',
       startedAt: 1,
     })
 
-    const reclaimable = await store.listReclaimable({
-      now: 10_000,
-      ttlMs: 5_000,
-    })
-    expect(reclaimable.map((r) => r.runId)).toEqual(['stale'])
+    const reclaimable = await store.listReclaimable({ now, ttlMs })
+    // Ordering is not part of the contract, so sort and compare exact sets.
+    expect(reclaimable.map((r) => r.runId).sort()).toEqual([
+      'boundary',
+      'included',
+    ])
   })
 
   it('findActiveRun returns the newest running run for the thread only', async () => {

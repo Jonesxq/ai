@@ -232,6 +232,7 @@ export type {
   RunStatus,
   TerminalRunStatus,
   RunRecord,
+  RunError,
   RunStore,
 } from './activities/chat/middleware/index'
 
