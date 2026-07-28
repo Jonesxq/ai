@@ -7,6 +7,8 @@ description: >
   client cache).
   Reload restore, pending interrupts, mid-stream rejoin with delivery
   durability. Use for SPA reload durability — NOT server history alone.
+  Also covers generation hooks (useGenerateImage etc.): the same adapters
+  persist a lightweight resume snapshot under generation:<id>.
   No extra package: the adapters ship in the framework packages.
 type: sub-skill
 library: tanstack-ai
@@ -109,6 +111,33 @@ Persistence keys on `threadId`. The hooks have **no separate `id` option** — a
 chat's identity _is_ its `threadId`. Without a stable one, each load is a new
 chat. Generate it server-side or from a route param the user owns; do not
 randomize per mount.
+
+## Generation hooks: lightweight resume snapshots
+
+The generation hooks (`useGenerateImage`, `useGenerateVideo`, `useGeneration`,
+`useSummarize`, `useTranscription`, …) take the **same adapters** via their
+`persistence` option, but store something much smaller than chat: a
+`GenerationResumeSnapshot` — run identity, status, error, and result metadata
+(ids, model, video `jobId`), **never the generated media bytes**.
+
+```tsx
+const image = useGenerateImage({
+  id: 'hero-image', // stable — the storage key is `generation:<id>`
+  connection: fetchServerSentEvents('/api/generate/image'),
+  persistence: localStoragePersistence(),
+})
+// After a reload: image.resumeSnapshot?.status is the last run's outcome.
+// image.resumeState is non-null only WHILE a run is streaming.
+```
+
+- Hydration is automatic on mount and validated
+  (`parseGenerationResumeSnapshot`); an explicit `initialResumeSnapshot` seed
+  skips it.
+- `stop()` marks the record no longer resumable; `reset()` deletes it.
+- Nothing auto-runs from a persisted snapshot — `generate(...)` is always
+  explicit.
+- The `generation:` key segment means a chat and a generation client can share
+  an id and an adapter without colliding.
 
 ## Common mistakes
 
