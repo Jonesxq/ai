@@ -47,7 +47,13 @@ SQLite. JSON payloads use `text({ mode: 'json' })` so Drizzle round-trips
 objects for you; timestamps are `integer` epoch ms.
 
 ```ts ignore
-import { integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+} from 'drizzle-orm/sqlite-core'
 import type { ModelMessage, TokenUsage } from '@tanstack/ai'
 import type { InterruptRecord, RunStatus } from '@tanstack/ai-persistence'
 
@@ -59,15 +65,27 @@ export const chatThreads = sqliteTable('chat_threads', {
   updatedAt: integer('updated_at').notNull(),
 })
 
-export const chatRuns = sqliteTable('chat_runs', {
-  runId: text('run_id').primaryKey(),
-  threadId: text('thread_id').notNull(),
-  status: text('status').$type<RunStatus>().notNull(),
-  startedAt: integer('started_at').notNull(),
-  finishedAt: integer('finished_at'),
-  error: text('error'),
-  usageJson: text('usage_json', { mode: 'json' }).$type<TokenUsage>(),
-})
+export const chatRuns = sqliteTable(
+  'chat_runs',
+  {
+    runId: text('run_id').primaryKey(),
+    threadId: text('thread_id').notNull(),
+    status: text('status').$type<RunStatus>().notNull(),
+    startedAt: integer('started_at').notNull(),
+    finishedAt: integer('finished_at'),
+    error: text('error'),
+    usageJson: text('usage_json', { mode: 'json' }).$type<TokenUsage>(),
+    sandboxKey: text('sandbox_key'),
+    detachedSince: integer('detached_since'),
+    cancelRequested: integer('cancel_requested', { mode: 'boolean' }),
+  },
+  (table) => [
+    // Powers listReclaimable: status = 'running' AND detachedSince <= cutoff.
+    index('chat_runs_status_detached').on(table.status, table.detachedSince),
+    // Powers listByThread and findActiveRun.
+    index('chat_runs_thread_started').on(table.threadId, table.startedAt),
+  ],
+)
 
 export const chatInterrupts = sqliteTable('chat_interrupts', {
   interruptId: text('interrupt_id').primaryKey(),
@@ -100,12 +118,14 @@ The `namespace` column is the `MetadataStore` first argument; the stock SQL in
 the guide calls the same column `scope`.
 
 **Postgres** (`drizzle-orm/pg-core`): `jsonb()` for the JSON payloads,
-`bigint({ mode: 'number' })` for epoch-ms timestamps, `text()` elsewhere,
+`bigint({ mode: 'number' })` for epoch-ms timestamps (including
+`detachedSince`), `boolean()` for `cancelRequested`, `text()` elsewhere,
 composite `primaryKey` on `(namespace, key)` unchanged. **MySQL**
-(`drizzle-orm/mysql-core`): `json()`, `bigint({ mode: 'number' })`, and
-`varchar(…, { length: 255 })` for the primary-key columns. The store bodies
-below are identical across all three — only `onConflictDoUpdate` becomes
-`onDuplicateKeyUpdate` on MySQL.
+(`drizzle-orm/mysql-core`): `json()`, `bigint({ mode: 'number' })`,
+`boolean()` for `cancelRequested`, and `varchar(..., { length: 255 })` for the
+primary-key columns. The store bodies below are identical across all three,
+only `onConflictDoUpdate` becomes `onDuplicateKeyUpdate` on MySQL, and the
+`(status, detachedSince)` / `(threadId, startedAt)` indexes carry over as is.
 
 ## 3. Write `src/lib/chat-persistence.ts`
 
@@ -113,7 +133,7 @@ The whole file. Idempotency is the entire game — the comments below mark the
 rules the conformance suite checks.
 
 ```ts ignore
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, isNotNull, lte } from 'drizzle-orm'
 import { defineAIPersistence } from '@tanstack/ai-persistence'
 import type { SQL } from 'drizzle-orm'
 import type {
@@ -147,6 +167,11 @@ function mapRun(row: typeof chatRuns.$inferSelect): RunRecord {
     ...(row.finishedAt != null ? { finishedAt: row.finishedAt } : {}),
     ...(row.error != null ? { error: row.error } : {}),
     ...(row.usageJson != null ? { usage: row.usageJson } : {}),
+    ...(row.sandboxKey != null ? { sandboxKey: row.sandboxKey } : {}),
+    ...(row.detachedSince != null ? { detachedSince: row.detachedSince } : {}),
+    ...(row.cancelRequested != null
+      ? { cancelRequested: row.cancelRequested }
+      : {}),
   }
 }
 
@@ -227,6 +252,11 @@ function createRunStore(db: Db): RunStore {
       if (patch.finishedAt !== undefined) set.finishedAt = patch.finishedAt
       if (patch.error !== undefined) set.error = patch.error
       if (patch.usage !== undefined) set.usageJson = patch.usage
+      if (patch.sandboxKey !== undefined) set.sandboxKey = patch.sandboxKey
+      if (patch.detachedSince !== undefined)
+        set.detachedSince = patch.detachedSince
+      if (patch.cancelRequested !== undefined)
+        set.cancelRequested = patch.cancelRequested
       if (Object.keys(set).length === 0) return
 
       await db.update(chatRuns).set(set).where(eq(chatRuns.runId, runId))
@@ -242,6 +272,32 @@ function createRunStore(db: Db): RunStore {
         .orderBy(desc(chatRuns.startedAt))
         .limit(1)
       return rows[0] ? mapRun(rows[0]) : null
+    },
+    // Optional; every run for the thread, ascending by startedAt. Uses the
+    // (threadId, startedAt) index.
+    async listByThread(threadId) {
+      const rows = await db
+        .select()
+        .from(chatRuns)
+        .where(eq(chatRuns.threadId, threadId))
+        .orderBy(asc(chatRuns.startedAt))
+      return rows.map(mapRun)
+    },
+    // Optional; still-running runs detached at or before the cutoff. Uses the
+    // (status, detachedSince) index. The cutoff is inclusive.
+    async listReclaimable({ now, ttlMs }) {
+      const cutoff = now - ttlMs
+      const rows = await db
+        .select()
+        .from(chatRuns)
+        .where(
+          and(
+            eq(chatRuns.status, 'running'),
+            isNotNull(chatRuns.detachedSince),
+            lte(chatRuns.detachedSince, cutoff),
+          ),
+        )
+      return rows.map(mapRun)
     },
   }
 }

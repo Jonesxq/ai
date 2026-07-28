@@ -55,15 +55,21 @@ model ChatThread {
 }
 
 model ChatRun {
-  runId      String  @id @map("run_id")
-  threadId   String  @map("thread_id")
-  status     String
-  startedAt  BigInt  @map("started_at")
-  finishedAt BigInt? @map("finished_at")
-  error      String?
-  usageJson  String? @map("usage_json")
+  runId           String  @id @map("run_id")
+  threadId        String  @map("thread_id")
+  status          String
+  startedAt       BigInt  @map("started_at")
+  finishedAt      BigInt? @map("finished_at")
+  error           String?
+  usageJson       String? @map("usage_json")
+  sandboxKey      String? @map("sandbox_key")
+  detachedSince   BigInt? @map("detached_since")
+  cancelRequested Boolean? @map("cancel_requested")
 
   @@index([threadId, status])
+  @@index([threadId, startedAt])
+  // Powers listReclaimable: status = 'running' AND detachedSince <= cutoff.
+  @@index([status, detachedSince])
   @@map("chat_runs")
 }
 
@@ -137,9 +143,10 @@ function parseJson<T>(raw: string): T {
 
 const RUN_STATUSES: ReadonlyArray<RunStatus> = [
   'running',
+  'interrupted',
   'completed',
   'failed',
-  'interrupted',
+  'aborted',
 ]
 const INTERRUPT_STATUSES: ReadonlyArray<InterruptStatus> = [
   'pending',
@@ -172,6 +179,13 @@ function mapRun(row: ChatRun): RunRecord {
     ...(row.error != null ? { error: row.error } : {}),
     ...(row.usageJson != null
       ? { usage: parseJson<TokenUsage>(row.usageJson) }
+      : {}),
+    ...(row.sandboxKey != null ? { sandboxKey: row.sandboxKey } : {}),
+    ...(row.detachedSince != null
+      ? { detachedSince: Number(row.detachedSince) }
+      : {}),
+    ...(row.cancelRequested != null
+      ? { cancelRequested: row.cancelRequested }
       : {}),
   }
 }
@@ -242,6 +256,11 @@ function createRunStore(db: PrismaClient): RunStore {
       if (patch.error !== undefined) data.error = patch.error
       if (patch.usage !== undefined)
         data.usageJson = JSON.stringify(patch.usage)
+      if (patch.sandboxKey !== undefined) data.sandboxKey = patch.sandboxKey
+      if (patch.detachedSince !== undefined)
+        data.detachedSince = BigInt(patch.detachedSince)
+      if (patch.cancelRequested !== undefined)
+        data.cancelRequested = patch.cancelRequested
       if (Object.keys(data).length === 0) return
 
       await db.chatRun.updateMany({ where: { runId }, data })
@@ -253,6 +272,27 @@ function createRunStore(db: PrismaClient): RunStore {
         orderBy: { startedAt: 'desc' },
       })
       return row ? mapRun(row) : null
+    },
+    // Optional; every run for the thread, ascending by startedAt. Uses the
+    // (threadId, startedAt) index.
+    async listByThread(threadId) {
+      const rows = await db.chatRun.findMany({
+        where: { threadId },
+        orderBy: { startedAt: 'asc' },
+      })
+      return rows.map(mapRun)
+    },
+    // Optional; still-running runs detached at or before the cutoff. Uses
+    // the (status, detachedSince) index. The cutoff is inclusive.
+    async listReclaimable({ now, ttlMs }) {
+      const cutoff = BigInt(now - ttlMs)
+      const rows = await db.chatRun.findMany({
+        where: {
+          status: 'running',
+          detachedSince: { not: null, lte: cutoff },
+        },
+      })
+      return rows.map(mapRun)
     },
   }
 }

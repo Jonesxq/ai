@@ -88,15 +88,21 @@ Two routes, same invariants:
 
 The invariants are the whole game, whichever route you take:
 
-| Store        | Rule                                                                                                              |
-| ------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `messages`   | `saveThread` is a full replace (`INSERT … ON CONFLICT(thread_id) DO UPDATE`)                                      |
-| `runs`       | `createOrResume` reads first, else `INSERT … ON CONFLICT DO NOTHING`, then re-reads                               |
-| `runs`       | `update` on an unknown id is a silent no-op — never throws, never inserts                                         |
-| `runs`       | `findActiveRun` returns the latest `'running'` run for the thread, else null — required for reload/switch tailing |
-| `interrupts` | `create` is insert-if-absent; never clobber a resolved interrupt back to pending                                  |
-| `interrupts` | every `list*` ends `ORDER BY requested_at ASC`                                                                    |
-| `metadata`   | reject nullish `set` with a clear `TypeError`; tell callers to use `delete`                                       |
+| Store        | Rule                                                                                                                                                                                               |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `messages`   | `saveThread` is a full replace (`INSERT … ON CONFLICT(thread_id) DO UPDATE`)                                                                                                                       |
+| `runs`       | `createOrResume` reads first, else `INSERT … ON CONFLICT DO NOTHING`, then re-reads                                                                                                                |
+| `runs`       | `update` on an unknown id is a silent no-op — never throws, never inserts                                                                                                                          |
+| `runs`       | `findActiveRun` (optional) returns the latest `'running'` run for the thread, else null                                                                                                            |
+| `runs`       | `listByThread` (optional) returns every run for the thread `ORDER BY started_at ASC`                                                                                                               |
+| `runs`       | `listReclaimable` (optional) returns runs where `status = 'running' AND detached_since IS NOT NULL AND detached_since <= now - ttlMs` (inclusive cutoff); it is a query, not automatic reclamation |
+| `interrupts` | `create` is insert-if-absent; never clobber a resolved interrupt back to pending                                                                                                                   |
+| `interrupts` | every `list*` ends `ORDER BY requested_at ASC`                                                                                                                                                     |
+| `metadata`   | reject nullish `set` with a clear `TypeError`; tell callers to use `delete`                                                                                                                        |
+
+On `runs`, `findActiveRun`, `listByThread`, and `listReclaimable` are optional
+methods. Implement only the ones the app needs; the middleware and the
+conformance testkit both feature-detect them and skip what is missing.
 
 Row mappers omit absent optionals (`...(row.error != null ? { error: row.error } : {})`)
 so records compare cleanly against the reference in-memory backend. JSON columns
@@ -120,9 +126,15 @@ CREATE TABLE IF NOT EXISTS chat_runs (
   started_at integer NOT NULL,
   finished_at integer,
   error text,
-  usage_json text
+  usage_json text,
+  sandbox_key text,
+  detached_since integer,
+  cancel_requested integer
 );
 CREATE INDEX IF NOT EXISTS chat_runs_thread_status ON chat_runs (thread_id, status);
+CREATE INDEX IF NOT EXISTS chat_runs_thread_started ON chat_runs (thread_id, started_at);
+-- Powers listReclaimable: status = 'running' AND detached_since <= cutoff.
+CREATE INDEX IF NOT EXISTS chat_runs_status_detached ON chat_runs (status, detached_since);
 CREATE TABLE IF NOT EXISTS chat_interrupts (
   interrupt_id text PRIMARY KEY NOT NULL,
   run_id text NOT NULL,

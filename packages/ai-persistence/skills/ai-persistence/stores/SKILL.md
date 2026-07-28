@@ -84,31 +84,83 @@ interface MessageStore {
 
 ### `RunStore`
 
+`RunStatus`, `RunRecord`, `RunStore`, `defineRunStore`, and `isTerminalRunStatus`
+are defined in `@tanstack/ai` and re-exported from `@tanstack/ai-persistence`.
+Import from either; the recipes in this skill import from
+`@tanstack/ai-persistence` so an adapter author needs only one package name.
+
+Three methods are required. Three are optional: implement only the ones your
+backend needs, and leave the rest off the object entirely (not `undefined`,
+just absent). The middleware feature-detects each with `store.method?.(...)`
+and degrades to "not supported" when a method is missing. The conformance
+testkit does the same: it skips the assertions for an optional method a
+backend does not implement, so a three-method `RunStore` is a fully valid,
+fully tested backend.
+
 ```ts
 interface RunStore {
-  createOrResume(input: {
-    runId: string
-    threadId: string
-    status?: RunStatus
-    startedAt: number
-  }): Promise<RunRecord>
+  // Required
+  createOrResume(
+    input: Pick<RunRecord, 'runId' | 'threadId' | 'startedAt'> & {
+      status?: RunStatus
+    },
+  ): Promise<RunRecord>
   update(
     runId: string,
     patch: Partial<
-      Pick<RunRecord, 'status' | 'finishedAt' | 'error' | 'usage'>
+      Pick<
+        RunRecord,
+        | 'status'
+        | 'finishedAt'
+        | 'error'
+        | 'usage'
+        | 'sandboxKey'
+        | 'detachedSince'
+        | 'cancelRequested'
+      >
     >,
   ): Promise<void>
   get(runId: string): Promise<RunRecord | null>
-  findActiveRun?(threadId: string): Promise<RunRecord | null> // optional
+
+  // Optional
+  listByThread?(threadId: string): Promise<Array<RunRecord>>
+  listReclaimable?(opts: {
+    now: number
+    ttlMs: number
+  }): Promise<Array<RunRecord>>
+  findActiveRun?(threadId: string): Promise<RunRecord | null>
 }
 ```
 
-- **`createOrResume`**: if `runId` exists, return it **unchanged** (ignore new
-  fields). Idempotent retries / resume depend on this.
-- **`update`**: missing `runId` is a **no-op** (do not throw, do not insert).
-- **`findActiveRun`**: latest `'running'` for `threadId` (max `startedAt`);
-  enables reconnect without a client-held run id. Optional — the middleware
-  feature-detects it.
+`RunStatus` is `'running' | 'interrupted' | 'completed' | 'failed' | 'aborted'`.
+`'interrupted'` is a human-in-the-loop pause, not terminal: it is what
+interrupt-resume continues from, and must never be conflated with `'aborted'`
+(an explicit cancellation). `TerminalRunStatus` narrows to
+`'completed' | 'failed' | 'aborted'`; `isTerminalRunStatus(status)` tests it.
+`RunRecord.error` is a plain string, not an error object.
+
+- **`createOrResume`** (required): if `runId` exists, return it **unchanged**,
+  ignoring the passed `threadId` / `startedAt` / `status`. Resuming a run does
+  not reset `startedAt` or overwrite its current status. Idempotent retries and
+  double-submit depend on this. `status` defaults to `'running'` on first
+  creation.
+- **`update`** (required): missing `runId` is a **no-op** (do not throw, do not
+  insert).
+- **`get`** (required): current record, or `null` when unknown.
+- **`listByThread`** (optional): every run for `threadId`, ascending by
+  `startedAt`. Only needed to render a thread's past agent activity.
+- **`listReclaimable`** (optional): runs where `status === 'running'` AND
+  `detachedSince` is set AND `detachedSince <= now - ttlMs`. The cutoff is
+  inclusive: a run detached exactly at the cutoff qualifies. This is a query, not
+  automatic behavior; nothing in the package reclaims runs today, so returning
+  this list has no side effect until a caller acts on it. `detachedSince` is a
+  field a caller sets (through `update`) when a viewer detaches; the framework
+  does not set it for you. `cancelRequested` is present on `RunRecord` and can be
+  read and written like any other field, but nothing in the framework populates
+  or acts on it yet.
+- **`findActiveRun`** (optional): the most recent `'running'` run for
+  `threadId` (max `startedAt`), or `null` if none is active. Enables reconnect
+  from a stable thread id without a client-held run id.
 
 ### `InterruptStore`
 
@@ -271,6 +323,16 @@ Middleware and tests assume ascending order.
 ### HIGH: Skipping the testkit
 
 Silent semantic drift shows up as stuck approvals or wiped history in prod.
+
+### HIGH: `listReclaimable` cutoff off by one
+
+The cutoff is inclusive (`detachedSince <= now - ttlMs`). Using a strict `<`
+drops runs detached exactly at the boundary.
+
+### HIGH: Treating `listReclaimable` as automatic reclamation
+
+It is a query a caller runs, not something the package acts on by itself.
+Nothing reaps a returned run for you.
 
 ## Cross-references
 

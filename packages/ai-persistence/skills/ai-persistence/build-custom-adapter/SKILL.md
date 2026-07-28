@@ -42,25 +42,31 @@ is `docs/persistence/build-your-own-adapter.md` and
 Four logical records. Whatever the engine, keep these keys — the store methods
 look records up by exactly these:
 
-| Record    | Key                | Fields                                                                              |
-| --------- | ------------------ | ----------------------------------------------------------------------------------- |
-| thread    | `threadId`         | `messages` (array, full transcript)                                                 |
-| run       | `runId`            | `threadId`, `status`, `startedAt`, `finishedAt?`, `error?`, `usage?`                |
-| interrupt | `interruptId`      | `runId`, `threadId`, `status`, `requestedAt`, `resolvedAt?`, `payload`, `response?` |
-| metadata  | `(namespace, key)` | `value`                                                                             |
+| Record    | Key                | Fields                                                                                                                    |
+| --------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| thread    | `threadId`         | `messages` (array, full transcript)                                                                                       |
+| run       | `runId`            | `threadId`, `status`, `startedAt`, `finishedAt?`, `error?`, `usage?`, `sandboxKey?`, `detachedSince?`, `cancelRequested?` |
+| interrupt | `interruptId`      | `runId`, `threadId`, `status`, `requestedAt`, `resolvedAt?`, `payload`, `response?`                                       |
+| metadata  | `(namespace, key)` | `value`                                                                                                                   |
 
 - Timestamps are **epoch milliseconds** (`number`) in records. Store them
   however the engine prefers and convert in the mapper.
 - `(namespace, key)` is a **composite** key. Never join with a separator —
   `('a:b','c')` and `('a','b:c')` must stay distinct records, and the
   conformance suite checks it.
-- Index `runs(threadId, status)` and `interrupts(threadId, requestedAt)` — those
-  are the two listing paths.
+- Index `runs(threadId, status)`, `runs(threadId, startedAt)`, and
+  `interrupts(threadId, requestedAt)` for the listing paths. If the backend
+  implements `listReclaimable`, also index `runs(status, detachedSince)`; that
+  is the query it runs.
+- `run.error` is a plain string, not an error object. `run.status` is one of
+  `'running' | 'interrupted' | 'completed' | 'failed' | 'aborted'`;
+  `'interrupted'` is a pause, not terminal, and only
+  `'completed' | 'failed' | 'aborted'` are terminal.
 - Extra app-owned columns are fine (a `userId`, audit columns) as long as they
   are nullable or defaulted. The stores never read columns they do not know
   about.
 
-## 3. The five invariants
+## 3. The invariants
 
 Getting one of these wrong is the usual source of stuck approvals and wiped
 history. They are engine-independent:
@@ -77,6 +83,11 @@ history. They are engine-independent:
 5. **`interrupts.create` is insert-if-absent** — never clobber a resolved
    interrupt back to pending. Every `list*` is ordered by `requestedAt`
    ascending.
+6. **`runs.listReclaimable` uses an inclusive cutoff** (if implemented):
+   `status === 'running' AND detachedSince <= now - ttlMs`. It is a query, not
+   automatic reclamation, and `runs.listByThread` / `runs.listReclaimable` /
+   `runs.findActiveRun` are all optional: implement only what the app needs
+   and leave the rest off the object.
 
 Row mappers omit absent optionals
 (`...(row.error != null ? { error: row.error } : {})`) so records compare
@@ -150,7 +161,11 @@ function createRunStore(db: Pool): RunStore {
         stored ?? { runId, threadId, status: status ?? 'running', startedAt }
       )
     },
-    // ... update (no-op on unknown id), findActiveRun (latest 'running')
+    // ... update (no-op on unknown id, patches sandboxKey/detachedSince/
+    // cancelRequested the same way as status/finishedAt/error/usage),
+    // findActiveRun (latest 'running', optional), listByThread (ascending
+    // by startedAt, optional), listReclaimable (status = 'running' AND
+    // detachedSince <= now - ttlMs, inclusive cutoff, optional)
   }
 }
 
