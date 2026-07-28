@@ -282,23 +282,90 @@ export function runPersistenceConformance(
 
       // `listReclaimable` is optional on the RunStore contract; backends that
       // have not implemented it are skipped, but any backend that has must
-      // surface running runs detached past the given ttl.
+      // surface only runs where ALL THREE hold: status === 'running',
+      // detachedSince is set, and detachedSince <= now - ttlMs (inclusive
+      // cutoff). Each negative fixture below pins one of those conditions so
+      // a backend that drops any single check (e.g. "return every run", or
+      // "ignore status", or "ignore detachedSince") fails this case. Do not
+      // simplify these away to a bare `toContain` — that is exactly the
+      // weakness this case was strengthened to catch.
       it('lists reclaimable detached runs when supported', async () => {
         const runs = resolveStore('runs')
         if (!runs) return
         if (!runs.listReclaimable) return
 
+        const now = 10_000
+        const ttlMs = 5_000
+        const cutoff = now - ttlMs // 5_000
+
+        // Positive: running, detached well past the cutoff.
         await runs.createOrResume({
-          runId: 'rc',
+          runId: 'rc-included',
           threadId: 'rc-t',
           startedAt: 1,
         })
-        await runs.update('rc', { detachedSince: 1_000 })
-        const reclaimable = await runs.listReclaimable({
-          now: 10_000,
-          ttlMs: 5_000,
+        await runs.update('rc-included', { detachedSince: 1_000 })
+
+        // Positive boundary: detachedSince exactly equals the cutoff. Pins
+        // the `<=` (inclusive) semantics — a backend that uses `<` instead
+        // would wrongly exclude this run.
+        await runs.createOrResume({
+          runId: 'rc-boundary',
+          threadId: 'rc-t',
+          startedAt: 1,
         })
-        expect(reclaimable.map((r) => r.runId)).toContain('rc')
+        await runs.update('rc-boundary', { detachedSince: cutoff })
+
+        // Negative: still running, but detached AFTER the cutoff (not yet
+        // abandoned long enough). Pins the `<= cutoff` comparison — a
+        // backend that returns every detached run regardless of how recent
+        // would wrongly include this one.
+        await runs.createOrResume({
+          runId: 'rc-too-recent',
+          threadId: 'rc-t',
+          startedAt: 1,
+        })
+        await runs.update('rc-too-recent', { detachedSince: cutoff + 1 })
+
+        // Negative: detached past the cutoff, but no longer running (already
+        // completed). Pins the `status === 'running'` check — a backend
+        // that ignores status would wrongly include this one.
+        await runs.createOrResume({
+          runId: 'rc-completed',
+          threadId: 'rc-t',
+          startedAt: 1,
+        })
+        await runs.update('rc-completed', {
+          detachedSince: 1_000,
+          status: 'completed',
+          finishedAt: 2_000,
+        })
+
+        // Negative: running, but never detached at all. Pins the
+        // `detachedSince !== undefined` check — a backend that treats a
+        // missing `detachedSince` as "always reclaimable" would wrongly
+        // include this one.
+        await runs.createOrResume({
+          runId: 'rc-never-detached',
+          threadId: 'rc-t',
+          startedAt: 1,
+        })
+
+        const reclaimable = await runs.listReclaimable({ now, ttlMs })
+
+        // Scope the assertion to ids seeded by this case: `listReclaimable`
+        // is not thread-scoped, so it also sees `'running'` runs seeded by
+        // sibling cases in this shared-store `describe('runs', ...)` block
+        // (e.g. `other-1`, `lt-a`, `lt-b`). Those all lack `detachedSince`,
+        // so a correct implementation already excludes them — but filtering
+        // here keeps this assertion from depending on that fact holding for
+        // every other case forever. Ordering is not part of this method's
+        // contract, so sort before an exact-set comparison.
+        const ourIds = reclaimable
+          .map((r) => r.runId)
+          .filter((id) => id.startsWith('rc-'))
+          .sort()
+        expect(ourIds).toEqual(['rc-boundary', 'rc-included'])
       })
     })
 
