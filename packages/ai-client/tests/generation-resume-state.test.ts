@@ -336,7 +336,11 @@ describe('parseGenerationResumeSnapshot', () => {
       {
         type: EventType.CUSTOM,
         name: GENERATION_EVENTS.RESULT,
-        value: { id: 'result-1', model: 'image-model', artifacts: [artifactRef] },
+        value: {
+          id: 'result-1',
+          model: 'image-model',
+          artifacts: [artifactRef],
+        },
         threadId: 'thread-1',
         runId: 'run-1',
         timestamp: 2,

@@ -74,7 +74,9 @@ const videoResumeSnapshot: GenerationResumeSnapshot = {
  * Storage adapter backed by a Map, so a test can seed a persisted record and
  * then assert on what the client read, wrote, and removed.
  */
-function createMapPersistence(seed?: Record<string, GenerationResumeSnapshot>): {
+function createMapPersistence(
+  seed?: Record<string, GenerationResumeSnapshot>,
+): {
   persistence: GenerationPersistence
   store: Map<string, GenerationResumeSnapshot>
   getItem: ReturnType<typeof vi.fn>
