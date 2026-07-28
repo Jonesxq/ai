@@ -140,7 +140,7 @@ export function createGenerateImage<TTransformed = void>(
     get status() {
       return gen.status
     },
-    generate: gen.generate as (input: ImageGenerateInput) => Promise<void>,
+    generate: gen.generate,
     stop: gen.stop,
     reset: gen.reset,
     updateBody: gen.updateBody,

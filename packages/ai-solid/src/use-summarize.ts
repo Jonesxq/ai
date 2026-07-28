@@ -123,10 +123,5 @@ export function useSummarize<TTransformed = void>(
     devtools,
   })
 
-  return {
-    ...generation,
-    generate: generation.generate as (
-      input: SummarizeGenerateInput,
-    ) => Promise<void>,
-  }
+  return generation
 }

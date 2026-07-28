@@ -127,10 +127,5 @@ export function useGenerateImage<TTransformed = void>(
     devtools,
   })
 
-  return {
-    ...generation,
-    generate: generation.generate as (
-      input: ImageGenerateInput,
-    ) => Promise<void>,
-  }
+  return generation
 }

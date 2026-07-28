@@ -131,7 +131,7 @@ export function createGenerateAudio<TTransformed = void>(
     get status() {
       return gen.status
     },
-    generate: gen.generate as (input: AudioGenerateInput) => Promise<void>,
+    generate: gen.generate,
     stop: gen.stop,
     reset: gen.reset,
     updateBody: gen.updateBody,

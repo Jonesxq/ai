@@ -49,10 +49,5 @@ export function injectSummarize<TTransformed = void>(
     ...options,
     devtools,
   })
-  return {
-    ...generation,
-    generate: generation.generate as (
-      input: SummarizeGenerateInput,
-    ) => Promise<void>,
-  }
+  return generation
 }

@@ -126,7 +126,7 @@ export function createGenerateSpeech<TTransformed = void>(
     get status() {
       return gen.status
     },
-    generate: gen.generate as (input: SpeechGenerateInput) => Promise<void>,
+    generate: gen.generate,
     stop: gen.stop,
     reset: gen.reset,
     updateBody: gen.updateBody,
