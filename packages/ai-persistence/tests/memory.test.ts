@@ -47,6 +47,23 @@ describe('memoryPersistence', () => {
       expect(got?.status).toBe('completed')
       expect(got?.finishedAt).toBe(200)
     })
+
+    it('run store satisfies the core RunStore contract, including optional methods', async () => {
+      const { runs } = memoryPersistence().stores
+      await runs!.createOrResume({ runId: 'a', threadId: 't1', startedAt: 2 })
+      await runs!.createOrResume({ runId: 'b', threadId: 't1', startedAt: 1 })
+      expect((await runs!.listByThread!('t1')).map((r) => r.runId)).toEqual([
+        'b',
+        'a',
+      ])
+
+      await runs!.update('a', { detachedSince: 1_000 })
+      const reclaimable = await runs!.listReclaimable!({
+        now: 10_000,
+        ttlMs: 5_000,
+      })
+      expect(reclaimable.map((r) => r.runId)).toEqual(['a'])
+    })
   })
 
   describe('messages', () => {
