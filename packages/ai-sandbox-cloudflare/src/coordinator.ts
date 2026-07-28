@@ -23,10 +23,17 @@
  */
 import { DurableObject } from 'cloudflare:workers'
 import { EventType } from '@tanstack/ai'
-import { RunController, isTerminalRunStatus } from '@tanstack/ai-sandbox'
+import { RunController } from './run-driver'
+// NOTE: `isTerminalRunStatus` MUST come from './run-log' (terminal set
+// `done|error|aborted`), NEVER from '@tanstack/ai' — core exports a same-named
+// helper with an identical signature but a different terminal set
+// (`completed|failed|aborted`). Importing core's version would make every
+// finished run read as still-running, so the watchdog below would never release
+// the instance. TypeScript cannot catch the swap.
+import { isTerminalRunStatus } from './run-log'
 import { DurableObjectRunEventLog } from './run-log-do'
 import type { ModelMessage, StreamChunk } from '@tanstack/ai'
-import type { RunRecord } from '@tanstack/ai-sandbox'
+import type { RunRecord } from './run-log'
 
 /** Re-arm window for the liveness watchdog while a run is in flight (ms). */
 const WATCHDOG_MS = 30_000
