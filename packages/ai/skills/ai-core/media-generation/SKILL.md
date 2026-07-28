@@ -563,6 +563,68 @@ if (result.usage?.unitsBilled != null) {
 For video, the units arrive with the completed result: `getVideoJobStatus()`
 returns `usage` and emits a `video:usage` devtools event when fal reports it.
 
+### 7. Durable persistence (job lifecycle + artifact bytes)
+
+To make generations survive a server restart and be re-served later, add
+`withGenerationPersistence` from `@tanstack/ai-persistence` as generation
+middleware. It requires `stores.jobs` (a `GenerationJobStore`, keyed on `jobId` —
+not a chat `threadId`) and, when you also pass an `stores.artifacts` +
+`stores.blobs` **pair** (both or neither), it persists the generated media bytes
+at blob key `artifacts/<runId>/<artifactId>` with an `ArtifactRecord` per file.
+`memoryPersistence()` ships all three for dev/tests.
+
+```typescript
+import { generateImage, toServerSentEventsResponse } from '@tanstack/ai'
+import { openaiImage } from '@tanstack/ai-openai'
+import {
+  withGenerationPersistence,
+  memoryPersistence,
+  retrieveArtifact,
+  retrieveBlob,
+  reconstructGeneration,
+} from '@tanstack/ai-persistence'
+
+const persistence = memoryPersistence() // swap for your DB/object-store adapter
+
+export async function POST(req: Request) {
+  const { prompt, threadId } = await req.json()
+  return toServerSentEventsResponse(
+    generateImage({
+      adapter: openaiImage('gpt-image-1'),
+      prompt,
+      threadId, // optional link recorded on the job + artifacts
+      stream: true,
+      middleware: [withGenerationPersistence(persistence)],
+    }),
+  )
+}
+
+// Serve the stored bytes back (GET /api/artifacts?id=…):
+export async function GET(req: Request) {
+  const id = new URL(req.url).searchParams.get('id') ?? ''
+  const record = await retrieveArtifact(persistence, id)
+  if (!record) return new Response('Not found', { status: 404 })
+  const blob = await retrieveBlob(persistence, record)
+  if (!blob?.body) return new Response('Not found', { status: 404 })
+  return new Response(blob.body, {
+    headers: { 'content-type': record.mimeType },
+  })
+}
+```
+
+On the client, the generation hooks mirror chat's two persistence modes:
+`persistence: <adapter>` (client-driven, caches a lightweight snapshot under
+`generation:<id>`) or `persistence: true` + a stable `threadId` (server-driven —
+hydrates the last generation for the thread on mount via the connection's
+`hydrateGeneration` handler, backed by a `reconstructGeneration` GET route).
+Neither mode ever stores the media bytes on the client.
+
+- Building the R2/D1-backed byte stores for a Cloudflare Worker:
+  **ai-persistence/build-cloudflare-artifact-store**.
+- Store contracts, `composePersistence`, and the two client modes end-to-end:
+  `docs/persistence/generation-persistence.md` and the
+  `ai-core/client-persistence` sub-skill.
+
 ---
 
 ## Common Hook API

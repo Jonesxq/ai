@@ -453,6 +453,40 @@ async function fetchThreadHydration(
   }
 }
 
+/**
+ * GET the hydration endpoint for a generation thread and parse its JSON
+ * `{ resumeSnapshot, activeRun }` body. Mirrors {@link fetchThreadHydration} for
+ * the generation clients: keyed on the stable thread id, it returns the last
+ * generation's resume snapshot (re-validated client-side before adoption) and —
+ * if a run is still generating — a cursor. Shared by every fetch/XHR adapter.
+ */
+async function fetchGenerationHydration(
+  fetchClient: typeof globalThis.fetch,
+  url: string,
+  headers: Record<string, string>,
+  credentials: RequestCredentials,
+  threadId: string,
+): Promise<GenerationHydrationResult> {
+  const response = await fetchClient(withSearchParams(url, { threadId }), {
+    method: 'GET',
+    headers: { Accept: 'application/json', ...headers },
+    credentials,
+  })
+  assertResponseOk(response)
+  const data = (await response.json()) as {
+    resumeSnapshot?: GenerationHydrationResult['resumeSnapshot']
+    activeRun?: { runId?: unknown } | null
+  }
+  const activeRun =
+    data.activeRun && typeof data.activeRun.runId === 'string'
+      ? { runId: data.activeRun.runId }
+      : null
+  return {
+    resumeSnapshot: data.resumeSnapshot ?? null,
+    activeRun,
+  }
+}
+
 /** Yield SSE stream events (chunk + offset) from a fetch Response body. */
 async function* responseToSSEEvents(
   response: Response,
@@ -707,6 +741,35 @@ export interface ConnectConnectionAdapter {
     abortSignal?: AbortSignal,
     runContext?: RunAgentInputContext,
   ) => AsyncIterable<StreamChunk>
+  /**
+   * Fetch server-driven hydration for a generation `threadId`: the last
+   * generation's resume snapshot, plus a cursor to a run still generating if
+   * one exists. The generation client calls this itself on mount when
+   * `persistence: true` (no loader/prop) and repaints the snapshot — it never
+   * auto-starts a run. Read-only JSON GET (`?threadId`), so it is
+   * transport-agnostic. Optional and feature-detected exactly like the chat
+   * `hydrate` handler.
+   */
+  hydrateGeneration?: (threadId: string) => Promise<GenerationHydrationResult>
+}
+
+/**
+ * Server-resolved hydration for a generation thread. `resumeSnapshot` is the
+ * last generation's lightweight snapshot (validated client-side before it is
+ * adopted); `activeRun` is a cursor to a run still generating for the thread
+ * (or `null`). Structurally matches `@tanstack/ai-persistence`'s
+ * `reconstructGeneration` response — the client never imports that package.
+ */
+export interface GenerationHydrationResult {
+  resumeSnapshot: {
+    schemaVersion?: 1
+    resumeState: { threadId?: string; runId: string } | null
+    status: 'idle' | 'running' | 'complete' | 'error'
+    result?: unknown
+    error?: { message: string; code?: string }
+    activity?: string
+  } | null
+  activeRun: { runId: string } | null
 }
 
 /**
@@ -1197,6 +1260,18 @@ export function fetchServerSentEvents(
         threadId,
       )
     },
+    async hydrateGeneration(threadId) {
+      const resolvedUrl = typeof url === 'function' ? url() : url
+      const resolvedOptions =
+        typeof options === 'function' ? await options() : options
+      return fetchGenerationHydration(
+        resolvedOptions.fetchClient ?? fetch,
+        resolvedUrl,
+        mergeHeaders(resolvedOptions.headers),
+        resolvedOptions.credentials || 'same-origin',
+        threadId,
+      )
+    },
   }
 }
 
@@ -1333,6 +1408,18 @@ export function fetchHttpStream(
       const resolvedOptions =
         typeof options === 'function' ? await options() : options
       return fetchThreadHydration(
+        resolvedOptions.fetchClient ?? fetch,
+        resolvedUrl,
+        mergeHeaders(resolvedOptions.headers),
+        resolvedOptions.credentials || 'same-origin',
+        threadId,
+      )
+    },
+    async hydrateGeneration(threadId) {
+      const resolvedUrl = typeof url === 'function' ? url() : url
+      const resolvedOptions =
+        typeof options === 'function' ? await options() : options
+      return fetchGenerationHydration(
         resolvedOptions.fetchClient ?? fetch,
         resolvedUrl,
         mergeHeaders(resolvedOptions.headers),
@@ -1666,6 +1753,19 @@ export function xhrServerSentEvents(
         threadId,
       )
     },
+    async hydrateGeneration(threadId) {
+      const resolvedUrl = typeof url === 'function' ? url() : url
+      const resolvedOptions = await resolveXhrConnectionOptions(options)
+      // Hydration is a non-streaming JSON GET, so fetch is fine even for the
+      // XHR-backed streaming adapter.
+      return fetchGenerationHydration(
+        fetch,
+        resolvedUrl,
+        mergeHeaders(resolvedOptions.headers),
+        resolvedOptions.withCredentials ? 'include' : 'same-origin',
+        threadId,
+      )
+    },
   }
 }
 
@@ -1729,6 +1829,19 @@ export function xhrHttpStream(
       // Hydration is a non-streaming JSON GET, so fetch is fine even for the
       // XHR-backed streaming adapter.
       return fetchThreadHydration(
+        fetch,
+        resolvedUrl,
+        mergeHeaders(resolvedOptions.headers),
+        resolvedOptions.withCredentials ? 'include' : 'same-origin',
+        threadId,
+      )
+    },
+    async hydrateGeneration(threadId) {
+      const resolvedUrl = typeof url === 'function' ? url() : url
+      const resolvedOptions = await resolveXhrConnectionOptions(options)
+      // Hydration is a non-streaming JSON GET, so fetch is fine even for the
+      // XHR-backed streaming adapter.
+      return fetchGenerationHydration(
         fetch,
         resolvedUrl,
         mergeHeaders(resolvedOptions.headers),

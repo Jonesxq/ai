@@ -451,6 +451,39 @@ describe('useGeneration', () => {
       expect(result.current.status).toBe('idle')
     })
 
+    it('server-driven (persistence: true) hydrates from the connection by threadId without a local store', async () => {
+      const { adapter, connect } = createRunContextCaptureAdapter(
+        createGenerationChunks({ id: '1' }),
+      )
+      const hydrateGeneration = vi.fn(async () => ({
+        resumeSnapshot: {
+          schemaVersion: 1 as const,
+          resumeState: null,
+          status: 'complete' as const,
+          result: { id: 'server-result', model: 'image-model' },
+        },
+        activeRun: null,
+      }))
+
+      const { result } = renderHook(() =>
+        useGeneration({
+          threadId: 'thread-server',
+          connection: { ...adapter, hydrateGeneration },
+          persistence: true,
+        }),
+      )
+
+      await waitFor(() => {
+        expect(result.current.resumeSnapshot).toMatchObject({
+          status: 'complete',
+          result: { id: 'server-result' },
+        })
+      })
+      expect(hydrateGeneration).toHaveBeenCalledWith('thread-server')
+      expect(connect).not.toHaveBeenCalled()
+      expect(result.current.status).toBe('idle')
+    })
+
     it('generates normally under React StrictMode (dispose → remount replay)', async () => {
       const { adapter, connect } = createRunContextCaptureAdapter(
         createGenerationChunks({ id: 'strict-1' }),

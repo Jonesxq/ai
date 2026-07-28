@@ -30,8 +30,19 @@ export interface UseTranscriptionOptions<TOutput = TranscriptionResult> {
   body?: Record<string, any>
   /** Display options for TanStack AI Devtools. */
   devtools?: AIDevtoolsDisplayOptions
-  /** Client-side storage adapter for the lightweight resume snapshot. Written under `generation:<id>` as a run streams and read back on mount. Media bytes are never stored. */
-  persistence?: GenerationPersistence
+  /**
+   * How this generation persists across reloads.
+   * - Omit / `false`: ephemeral, in-memory only.
+   * - `true`: server-driven — on mount the client hydrates the last generation
+   *   for its `threadId` from the server (needs a connection with a
+   *   `hydrateGeneration` handler) and repaints it; it never auto-starts a run.
+   * - a storage adapter: client-driven — the lightweight snapshot is cached under
+   *   `generation:<id>` as a run streams and read back on mount. Media bytes are
+   *   never stored.
+   */
+  persistence?: boolean | GenerationPersistence
+  /** Thread id for this generation, stable across reloads. Server-driven mode (`persistence: true`) hydrates the last generation under this key. Falls back to `id`. */
+  threadId?: string
   /** Explicit resume-snapshot seed for apps that manage storage themselves; skips automatic hydration from `persistence`. Later run events merge into it. */
   initialResumeSnapshot?: GenerationResumeSnapshot
   /**

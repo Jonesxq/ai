@@ -825,11 +825,11 @@ type InvalidChatPersistence<TStores extends AIPersistenceStores> =
       : false
 
 /**
- * Generation entrypoint invalid when `runs` is known-absent, or when exactly one
+ * Generation entrypoint invalid when `jobs` is known-absent, or when exactly one
  * of `artifacts` / `blobs` is present (artifact persistence needs both).
  */
 type InvalidGenerationPersistence<TStores extends AIPersistenceStores> =
-  StoreIsDefinitelyAbsent<TStores, 'runs'> extends true
+  StoreIsDefinitelyAbsent<TStores, 'jobs'> extends true
     ? true
     : StoreIsDefinitelyPresent<TStores, 'artifacts'> extends true
       ? StoreIsDefinitelyAbsent<TStores, 'blobs'>
@@ -1145,25 +1145,21 @@ export function withPersistence<TStores extends ChatTranscriptStores>(
 // ---------------------------------------------------------------------------
 
 /**
- * Generation-only persistence middleware. Tracks run status (run records) and,
- * when `stores.artifacts` + `stores.blobs` are both provided, persists the
- * generated media for image, audio, TTS, video, and transcription activities.
+ * Generation-only persistence middleware. Tracks generation job status (job
+ * records keyed by `jobId`) and, when `stores.artifacts` + `stores.blobs` are
+ * both provided, persists the generated media for image, audio, TTS, video, and
+ * transcription activities.
  *
- * Requires `stores.runs`.
+ * Requires `stores.jobs`. A generation activity has no conversation, so the job
+ * is keyed on its own `jobId` (`ctx.runId ?? ctx.requestId`). `ctx.threadId` is
+ * carried through only as an OPTIONAL *link* to a chat when the caller supplies
+ * one — it is never the job's primary identity and is never faked from the
+ * request id.
  *
- * ⚠️ TEMPORARY / WRONG SHAPE — do not extend this design.
- *
- * Generation jobs must **not** fake `threadId = requestId`. `threadId` is the
- * shared conversation key ({@link Scope.threadId} / chat middleware); a
- * generation activity has no conversation. Dual-keying chat {@link RunStore}
- * with `(runId: requestId, threadId: requestId)` pollutes chat run queries and
- * confuses `findActiveRun(threadId)`.
- *
- * The follow-up generation-persistence work should introduce a dedicated job
- * store (e.g. `GenerationJobStore` keyed by `jobId` / `requestId`) and optional
- * later artifact storage — not reuse chat `RunStore` / `MessageStore`. An
- * optional `threadId` on a job is only a *link* to a chat when the product
- * needs it, never the job's primary identity.
+ * On success the terminal result metadata (ids, urls — never media bytes) and,
+ * when artifact persistence is on, the persisted artifact refs are captured onto
+ * the job record so a server-authoritative client can hydrate the last
+ * generation for a thread via {@link reconstructGeneration}.
  */
 export function withGenerationPersistence<TStores extends AIPersistenceStores>(
   persistence: AIPersistence<TStores> & ValidGenerationPersistence<TStores>,
@@ -1175,32 +1171,63 @@ export function withGenerationPersistence(
 ): GenerationMiddleware {
   validateGenerationPersistenceStores(persistence)
   const { wantsArtifactPersistence } = resolvePersistencePlan(persistence)
-  const runStore = persistence.stores.runs
-  if (!runStore) {
+  const jobs = persistence.stores.jobs
+  if (!jobs) {
     // validateGenerationPersistenceStores already throws; this narrows for TypeScript.
-    throw new Error('Generation persistence requires stores.runs.')
+    throw new Error('Generation persistence requires stores.jobs.')
   }
+
+  const jobIdOf = (ctx: GenerationMiddlewareContext): string =>
+    ctx.runId ?? ctx.requestId
 
   return {
     name: 'generation-persistence',
 
     async onStart(ctx: GenerationMiddlewareContext) {
-      // STOPGAP ONLY — see function JSDoc. Do not copy this pattern.
-      await createOrResumeRun(runStore, ctx.requestId, ctx.requestId)
-      if (!wantsArtifactPersistence) return
+      const jobId = jobIdOf(ctx)
+      const threadId = ctx.threadId
+      await jobs.createOrResume({
+        jobId,
+        activity: ctx.activity,
+        provider: ctx.provider,
+        model: ctx.model,
+        startedAt: Date.now(),
+        ...(threadId !== undefined ? { threadId } : {}),
+      })
+
+      // Extract + persist artifact bytes (media → blobs, metadata → artifacts)
+      // and merge the resulting refs onto the result. Gated on artifact stores.
+      if (wantsArtifactPersistence) {
+        ctx.resultTransforms?.push(async (result) => {
+          const refs = await persistGenerationArtifacts(
+            persistence,
+            opts,
+            ctx,
+            result,
+          )
+          if (refs.length === 0) return undefined
+          const existing = objectValue(result)?.artifacts
+          return {
+            ...(objectValue(result) ?? {}),
+            artifacts: [...(Array.isArray(existing) ? existing : []), ...refs],
+          }
+        })
+      }
+
+      // Always capture the terminal result metadata + any artifact refs onto the
+      // job record. Registered AFTER the artifact transform so it observes the
+      // fully-merged result (with the artifact refs attached). `result` is
+      // metadata/urls only — the media bytes already live in the blob store.
       ctx.resultTransforms?.push(async (result) => {
-        const refs = await persistGenerationArtifacts(
-          persistence,
-          opts,
-          ctx,
+        const rawArtifacts = objectValue(result)?.artifacts
+        const artifacts = Array.isArray(rawArtifacts)
+          ? rawArtifacts.filter(isArtifactRef)
+          : []
+        await jobs.update(jobId, {
           result,
-        )
-        if (refs.length === 0) return undefined
-        const existing = objectValue(result)?.artifacts
-        return {
-          ...(objectValue(result) ?? {}),
-          artifacts: [...(Array.isArray(existing) ? existing : []), ...refs],
-        }
+          ...(artifacts.length > 0 ? { artifacts } : {}),
+        })
+        return undefined
       })
     },
 
@@ -1208,18 +1235,34 @@ export function withGenerationPersistence(
       ctx: GenerationMiddlewareContext,
       info: GenerationFinishInfo,
     ) {
-      await completeRun(runStore, ctx.requestId, info.usage)
+      await jobs.update(jobIdOf(ctx), {
+        status: 'complete',
+        finishedAt: Date.now(),
+        ...(info.usage ? { usage: info.usage } : {}),
+      })
     },
 
     async onError(ctx: GenerationMiddlewareContext, info: GenerationErrorInfo) {
-      await failRun(runStore, ctx.requestId, info.error)
+      await jobs.update(jobIdOf(ctx), {
+        status: 'error',
+        finishedAt: Date.now(),
+        error: {
+          message:
+            info.error instanceof Error
+              ? info.error.message
+              : String(info.error),
+        },
+      })
     },
 
     async onAbort(
       ctx: GenerationMiddlewareContext,
       _info: GenerationAbortInfo,
     ) {
-      await interruptRun(runStore, ctx.requestId)
+      await jobs.update(jobIdOf(ctx), {
+        status: 'interrupted',
+        finishedAt: Date.now(),
+      })
     },
   }
 }

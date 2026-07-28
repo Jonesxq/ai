@@ -9,6 +9,7 @@ import { parseSSEResponse } from './sse-parser'
 import type { StreamChunk } from '@tanstack/ai/client'
 import type {
   ConnectConnectionAdapter,
+  GenerationHydrationResult,
   RunAgentInputContext,
 } from './connection-adapters'
 import type {
@@ -99,6 +100,9 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
   private readonly devtoolsBridge: VideoDevtoolsBridge<TOutput>
   private readonly threadId: string
   private readonly resumePersistence: GenerationPersistence | undefined
+  // Server-driven mode (`persistence: true`): no local snapshot store; on mount
+  // the client hydrates the last generation for `threadId` from the server.
+  private readonly serverDriven: boolean = false
   private body: Record<string, any>
 
   private result: TOutput | null = null
@@ -130,11 +134,22 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
       ),
   ) {
     this.uniqueId = options.id ?? this.generateUniqueId('video')
-    this.threadId = this.uniqueId
+    // The wire/hydration thread key. Server-driven mode needs a stable key, so
+    // prefer an explicit `threadId`, then `id`, then a generated id.
+    this.threadId = options.threadId ?? this.uniqueId
     this.connection = options.connection
     this.fetcher = options.fetcher
     this.body = options.body ?? {}
-    this.resumePersistence = options.persistence
+    // `persistence` is `false`/omitted (ephemeral), `true` (server-driven: cache
+    // nothing, hydrate the last generation for `threadId` on mount), or a storage
+    // adapter (client-driven: cache the lightweight resume snapshot locally).
+    // Only the server-driven mode leaves `resumePersistence` undefined AND turns
+    // on mount hydration.
+    if (options.persistence === true) {
+      this.serverDriven = true
+    } else if (options.persistence) {
+      this.resumePersistence = options.persistence
+    }
     this.resumeSnapshot = options.initialResumeSnapshot
 
     this.callbacksRef = {
@@ -161,6 +176,19 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
     // After callbacksRef is assigned: hydration may fire
     // onResumeSnapshotChange synchronously if an adapter resolves sync.
     this.maybeHydrateResumeSnapshot()
+
+    // Server-driven (`persistence: true`): the client caches nothing locally and
+    // re-hydrates the last generation for its stable threadId from the server on
+    // mount. Best-effort and non-blocking; it never auto-starts a run.
+    if (this.serverDriven && this.connection?.hydrateGeneration) {
+      this.hydrateFromServer()
+    } else if (this.serverDriven) {
+      // `persistence: true` without a hydrate-capable connection can never
+      // restore anything — warn rather than silently no-op.
+      console.warn(
+        '[TanStack AI] `persistence: true` (server-driven) needs a connection that implements `hydrateGeneration` (e.g. `fetchServerSentEvents` / `fetchHttpStream`). With a plain `fetcher` or no connection, nothing is persisted or restored.',
+      )
+    }
   }
 
   private buildDevtoolsBridgeOptions(): VideoDevtoolsBridgeOptions<TOutput> {
@@ -751,6 +779,36 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
     if (this.resumeSnapshot || this.isLoading || this.status !== 'idle') return
     this.resumeSnapshot = snapshot
     this.callbacksRef.onResumeSnapshotChange?.(snapshot)
+  }
+
+  /**
+   * Server-driven mount hydration (`persistence: true`). The client holds no
+   * local snapshot; on mount it asks the server — keyed by the stable threadId —
+   * for the last generation's resume snapshot, validates it, and repaints it. It
+   * never auto-starts a run. Best-effort and non-blocking: a failure leaves the
+   * client empty rather than throwing, and a `generate()` that starts first owns
+   * the client (hydration then backs off, mirroring the chat client).
+   */
+  private hydrateFromServer(): void {
+    const hydrate = this.connection?.hydrateGeneration
+    if (!hydrate) return
+    // A send that already started owns the client; don't stomp it.
+    if (this.resumeSnapshot || this.isLoading || this.status !== 'idle') return
+    void (async () => {
+      let res: GenerationHydrationResult
+      try {
+        res = await hydrate(this.threadId)
+      } catch {
+        return
+      }
+      if (!res.resumeSnapshot) return
+      const snapshot = parseGenerationResumeSnapshot(res.resumeSnapshot)
+      if (!snapshot) return
+      // Re-check: a send may have started while the fetch was in flight.
+      if (this.resumeSnapshot || this.isLoading || this.status !== 'idle') return
+      this.resumeSnapshot = snapshot
+      this.callbacksRef.onResumeSnapshotChange?.(snapshot)
+    })()
   }
 
   private async persistResumeSnapshot(

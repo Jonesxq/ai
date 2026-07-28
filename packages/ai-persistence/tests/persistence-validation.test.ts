@@ -4,6 +4,7 @@ import { reconstructChat } from '../src/reconstruct'
 import { defineAIPersistence } from '../src/types'
 import type { ChatTranscriptPersistence } from '../src/types'
 import {
+  createGenerationJobStore,
   createInterruptStore,
   createMessageStore,
   createRunStore,
@@ -60,7 +61,7 @@ describe('persistence store dependency validation', () => {
     expect(() => withPersistence(persistence)).not.toThrow()
   })
 
-  it('rejects generation persistence without runs', () => {
+  it('rejects generation persistence without jobs', () => {
     const persistence = defineAIPersistence({
       stores: { messages: createMessageStore() },
     })
@@ -69,12 +70,12 @@ describe('persistence store dependency validation', () => {
       withGenerationPersistence(
         persistence as Parameters<typeof withGenerationPersistence>[0],
       ),
-    ).toThrow(/requires stores\.runs/i)
+    ).toThrow(/requires stores\.jobs/i)
   })
 
-  it('allows generation persistence with runs', () => {
+  it('allows generation persistence with jobs', () => {
     const persistence = defineAIPersistence({
-      stores: { runs: createRunStore() },
+      stores: { jobs: createGenerationJobStore() },
     })
 
     expect(() => withGenerationPersistence(persistence)).not.toThrow()

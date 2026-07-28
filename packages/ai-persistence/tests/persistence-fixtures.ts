@@ -1,4 +1,6 @@
 import type {
+  GenerationJobRecord,
+  GenerationJobStore,
   InterruptStore,
   MessageStore,
   MetadataStore,
@@ -45,6 +47,33 @@ export function createRunStore(): RunStore {
         .sort((a, b) => b.startedAt - a.startedAt)
       return Promise.resolve(active[0] ?? null)
     },
+  }
+}
+
+export function createGenerationJobStore(): GenerationJobStore {
+  const jobs = new Map<string, GenerationJobRecord>()
+  return {
+    createOrResume: (input) => {
+      const existing = jobs.get(input.jobId)
+      if (existing) return Promise.resolve(existing)
+      const record: GenerationJobRecord = {
+        jobId: input.jobId,
+        activity: input.activity,
+        provider: input.provider,
+        model: input.model,
+        status: input.status ?? 'running',
+        startedAt: input.startedAt,
+        ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+      }
+      jobs.set(record.jobId, record)
+      return Promise.resolve(record)
+    },
+    update: (jobId, patch) => {
+      const existing = jobs.get(jobId)
+      if (existing) jobs.set(jobId, { ...existing, ...patch })
+      return Promise.resolve()
+    },
+    get: (jobId) => Promise.resolve(jobs.get(jobId) ?? null),
   }
 }
 

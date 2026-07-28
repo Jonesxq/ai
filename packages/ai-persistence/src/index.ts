@@ -6,6 +6,9 @@ export {
   defineRunStore,
   defineInterruptStore,
   defineMetadataStore,
+  defineGenerationJobStore,
+  defineArtifactStore,
+  defineBlobStore,
 } from './types'
 export type {
   MessageStore,
@@ -23,6 +26,10 @@ export type {
   ChatTranscriptPersistence,
   ChatPersistence,
   ChatWithInterruptsPersistence,
+  // Generation job store contract
+  GenerationJobStatus,
+  GenerationJobRecord,
+  GenerationJobStore,
   // Generation artifact + blob store contracts
   ArtifactRecord,
   ArtifactStore,
@@ -62,6 +69,13 @@ export type {
 // Server helper: rehydrate a thread's messages for a client load
 export { reconstructChat } from './reconstruct'
 export type { ReconstructChatOptions } from './reconstruct'
+
+// Server helper: rehydrate the last generation job for a client load
+export { reconstructGeneration } from './reconstruct-generation'
+export type {
+  ReconstructedGeneration,
+  ReconstructGenerationOptions,
+} from './reconstruct-generation'
 
 // Server helpers: retrieve a persisted generation artifact + its bytes
 export { retrieveArtifact, retrieveBlob, artifactBlobKey } from './retrieve'

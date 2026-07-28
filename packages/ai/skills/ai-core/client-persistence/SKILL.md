@@ -7,8 +7,10 @@ description: >
   client cache).
   Reload restore, pending interrupts, mid-stream rejoin with delivery
   durability. Use for SPA reload durability — NOT server history alone.
-  Also covers generation hooks (useGenerateImage etc.): the same adapters
-  persist a lightweight resume snapshot under generation:<id>.
+  Also covers generation hooks (useGenerateImage etc.), same two modes as chat:
+  client-driven (adapter) persists a lightweight resume snapshot under
+  generation:<id>; server-driven (persistence: true + threadId) hydrates the last
+  generation from the server on mount, nothing cached.
   No extra package: the adapters ship in the framework packages.
 type: sub-skill
 library: tanstack-ai
@@ -112,13 +114,15 @@ chat's identity _is_ its `threadId`. Without a stable one, each load is a new
 chat. Generate it server-side or from a route param the user owns; do not
 randomize per mount.
 
-## Generation hooks: lightweight resume snapshots
+## Generation hooks: two modes, mirroring chat
 
 The generation hooks (`useGenerateImage`, `useGenerateVideo`, `useGeneration`,
-`useSummarize`, `useTranscription`, …) take the **same adapters** via their
-`persistence` option, but store something much smaller than chat: a
-`GenerationResumeSnapshot` — run identity, status, error, and result metadata
-(ids, model, video `jobId`), **never the generated media bytes**.
+`useSummarize`, `useTranscription`, …) take the **same `persistence` option** as
+`useChat` — `boolean | adapter` — with the same two-mode split. Whichever mode,
+what persists is a `GenerationResumeSnapshot`: run identity, status, error, and
+result metadata (ids, model, video `jobId`), **never the generated media bytes**.
+
+### Mode A — client-driven (a storage adapter)
 
 ```tsx
 const image = useGenerateImage({
@@ -130,14 +134,44 @@ const image = useGenerateImage({
 // image.resumeState is non-null only WHILE a run is streaming.
 ```
 
+- The lightweight snapshot is cached in the browser under `generation:<id>` as a
+  run streams, and read back on mount.
 - Hydration is automatic on mount and validated
   (`parseGenerationResumeSnapshot`); an explicit `initialResumeSnapshot` seed
   skips it.
-- `stop()` marks the record no longer resumable; `reset()` deletes it.
-- Nothing auto-runs from a persisted snapshot — `generate(...)` is always
-  explicit.
 - The `generation:` key segment means a chat and a generation client can share
   an id and an adapter without colliding.
+
+### Mode B — server-driven (`persistence: true`)
+
+```tsx
+const image = useGenerateImage({
+  threadId, // stable — the key the last generation is hydrated under (falls back to id)
+  connection: fetchServerSentEvents('/api/generate/image'),
+  persistence: true,
+})
+// After a reload: image.resumeSnapshot is the last generation for `threadId`,
+// fetched from the server — nothing was cached in the browser.
+```
+
+- Nothing is cached client-side. On mount the client hydrates the **last
+  generation** for its `threadId` from the server via the connection's
+  `hydrateGeneration` handler (the SSE/HTTP adapters issue a `GET` with
+  `?threadId=` to the same endpoint URL) and repaints that snapshot.
+- The server `GET` returns `reconstructGeneration(persistence, request)` from
+  `@tanstack/ai-persistence` — it resolves the job by `?jobId=` (preferred) or
+  the latest job linked to `?threadId=`, and needs `stores.jobs`. Pair it with
+  `withGenerationPersistence` on the generation route. See
+  `ai-core/media-generation` and `ai-persistence`.
+- Best for multi-device / compliance (no generation metadata in browser
+  storage), exactly like chat Mode B.
+
+Common to both modes:
+
+- `stop()` marks the record no longer resumable; `reset()` deletes it (Mode A) or
+  clears the in-memory snapshot (Mode B).
+- Nothing auto-runs from a hydrated snapshot — `generate(...)` is always
+  explicit.
 
 ## Common mistakes
 

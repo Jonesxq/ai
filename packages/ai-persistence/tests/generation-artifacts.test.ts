@@ -243,15 +243,98 @@ describe('withGenerationPersistence generation artifacts', () => {
     })
   })
 
-  it('allows run tracking without artifact stores', () => {
+  it('allows job tracking without artifact stores', () => {
     const full = memoryPersistence()
     const persistence = defineAIPersistence({
+      stores: {
+        jobs: full.stores.jobs,
+      },
+    })
+
+    expect(() => withGenerationPersistence(persistence)).not.toThrow()
+  })
+
+  it('throws when the job store is missing', () => {
+    const full = memoryPersistence()
+    const persistence: AIPersistence = defineAIPersistence({
       stores: {
         runs: full.stores.runs,
       },
     })
 
-    expect(() => withGenerationPersistence(persistence)).not.toThrow()
+    expect(() => withGenerationPersistence(persistence)).toThrow(
+      /Generation persistence requires stores\.jobs/i,
+    )
+  })
+
+  it('records a job that transitions running -> complete with result + artifacts', async () => {
+    const persistence = memoryPersistence()
+
+    const result = await generateImage({
+      adapter: imageAdapter(),
+      prompt: 'make an image',
+      threadId: 'thread-job',
+      runId: 'run-job',
+      middleware: [withGenerationPersistence(persistence)],
+    })
+
+    const job = await persistence.stores.jobs.get('run-job')
+    expect(job).toMatchObject({
+      jobId: 'run-job',
+      threadId: 'thread-job',
+      activity: 'image',
+      provider: 'test-image-provider',
+      model: 'test-image-model',
+      status: 'complete',
+    })
+    expect(job?.finishedAt).toEqual(expect.any(Number))
+    // Terminal result metadata is captured on the job (never the media bytes).
+    expect(job?.result).toBeDefined()
+    // Persisted artifact refs land on the job too.
+    expect(job?.artifacts).toHaveLength(1)
+    expect(job?.artifacts?.[0]?.artifactId).toBe(result.artifacts![0]!.artifactId)
+  })
+
+  it('links the job to a thread and finds the latest for that thread', async () => {
+    const persistence = memoryPersistence()
+
+    await generateImage({
+      adapter: imageAdapter(),
+      prompt: 'make an image',
+      threadId: 'thread-latest',
+      runId: 'run-latest-1',
+      middleware: [withGenerationPersistence(persistence)],
+    })
+
+    const latest =
+      await persistence.stores.jobs.findLatestForThread!('thread-latest')
+    expect(latest?.jobId).toBe('run-latest-1')
+    expect(latest?.status).toBe('complete')
+  })
+
+  it('records an error job when generation throws', async () => {
+    const persistence = memoryPersistence()
+    const adapter = imageAdapter()
+    adapter.generateImages = vi.fn(async () => {
+      throw new Error('boom')
+    })
+
+    await expect(
+      generateImage({
+        adapter,
+        prompt: 'make an image',
+        threadId: 'thread-error',
+        runId: 'run-error',
+        middleware: [withGenerationPersistence(persistence)],
+      }),
+    ).rejects.toThrow('boom')
+
+    const job = await persistence.stores.jobs.get('run-error')
+    expect(job).toMatchObject({
+      jobId: 'run-error',
+      status: 'error',
+      error: { message: 'boom' },
+    })
   })
 
   it('uses custom artifact extraction instead of built-in extraction', async () => {

@@ -6,7 +6,10 @@ import {
   VideoGenerationClient,
 } from '../src'
 import type { StreamChunk } from '@tanstack/ai/client'
-import type { ConnectConnectionAdapter } from '../src/connection-adapters'
+import type {
+  ConnectConnectionAdapter,
+  GenerationHydrationResult,
+} from '../src/connection-adapters'
 import type { GenerationResumeSnapshot, GenerationPersistence } from '../src'
 
 // Helper to create a mock connect-based adapter from StreamChunks
@@ -1767,6 +1770,181 @@ describe('GenerationClient', () => {
 
       await client.generate({ prompt: 'test' })
       expect(connectSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('server-driven persistence (persistence: true)', () => {
+    const completedHydration: GenerationHydrationResult = {
+      resumeSnapshot: {
+        schemaVersion: 1,
+        resumeState: null,
+        status: 'complete',
+        result: { id: 'result-1', model: 'image-model' },
+      },
+      activeRun: null,
+    }
+
+    function createHydratingConnection(
+      result: GenerationHydrationResult,
+    ): {
+      connection: ConnectConnectionAdapter
+      hydrateGeneration: ReturnType<typeof vi.fn>
+    } {
+      const hydrateGeneration = vi.fn(async () => result)
+      return {
+        connection: { async *connect() {}, hydrateGeneration },
+        hydrateGeneration,
+      }
+    }
+
+    it('adopts the server snapshot on mount, keyed by threadId, without a local store', async () => {
+      const { connection, hydrateGeneration } =
+        createHydratingConnection(completedHydration)
+      const onResumeSnapshotChange = vi.fn()
+      const client = new GenerationClient({
+        threadId: 'thread-server',
+        connection,
+        persistence: true,
+        onResumeSnapshotChange,
+      })
+
+      await waitForCondition(() => {
+        expect(client.getResumeSnapshot()).toMatchObject({
+          status: 'complete',
+          result: { id: 'result-1' },
+        })
+      })
+      expect(hydrateGeneration).toHaveBeenCalledWith('thread-server')
+      expect(onResumeSnapshotChange).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'complete' }),
+      )
+    })
+
+    it('does nothing when the connection exposes no hydrateGeneration', async () => {
+      const client = new GenerationClient({
+        threadId: 'thread-server',
+        connection: createMockConnection([]),
+        persistence: true,
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(client.getResumeSnapshot()).toBeUndefined()
+    })
+
+    it('ignores an invalid server snapshot without throwing', async () => {
+      const { connection } = createHydratingConnection({
+        // Structurally invalid status — must be rejected by the client's parser.
+        resumeSnapshot: {
+          resumeState: null,
+          status: 'bogus',
+        } as unknown as GenerationHydrationResult['resumeSnapshot'],
+        activeRun: null,
+      })
+      const client = new GenerationClient({
+        threadId: 'thread-server',
+        connection,
+        persistence: true,
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(client.getResumeSnapshot()).toBeUndefined()
+    })
+
+    it('does not stomp a run that a generate() started before hydration resolves', async () => {
+      const hydrateGeneration = vi.fn(
+        async (): Promise<GenerationHydrationResult> => completedHydration,
+      )
+      const connection: ConnectConnectionAdapter = {
+        async *connect() {
+          yield {
+            type: EventType.RUN_STARTED,
+            runId: 'run-live',
+            threadId: 'thread-server',
+            timestamp: Date.now(),
+          } satisfies StreamChunk
+          yield {
+            type: EventType.RUN_FINISHED,
+            runId: 'run-live',
+            threadId: 'thread-server',
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          } satisfies StreamChunk
+        },
+        hydrateGeneration,
+      }
+      const client = new GenerationClient({
+        threadId: 'thread-server',
+        connection,
+        persistence: true,
+      })
+
+      // Start a live run immediately; it owns the client and hydration backs off.
+      await client.generate({ prompt: 'test' })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(client.getStatus()).toBe('success')
+      // The live run's terminal snapshot (from run-live), not the server's.
+      expect(client.getResumeSnapshot()).toMatchObject({ status: 'complete' })
+      expect(client.getResumeSnapshot()?.result?.id).toBeUndefined()
+    })
+
+    it('leaves the client-driven adapter path unchanged (writes locally, no hydrateGeneration)', async () => {
+      const hydrateGeneration = vi.fn()
+      const store = new Map<string, unknown>()
+      const persistence = {
+        getItem: vi.fn((key: string) => store.get(key) ?? null),
+        setItem: vi.fn((key: string, value: unknown) => {
+          store.set(key, value)
+        }),
+        removeItem: vi.fn((key: string) => {
+          store.delete(key)
+        }),
+      } as unknown as GenerationPersistence
+      const client = new GenerationClient({
+        id: 'local-hero',
+        connection: {
+          async *connect() {
+            yield {
+              type: EventType.RUN_STARTED,
+              runId: 'run-1',
+              threadId: 'thread-1',
+              timestamp: Date.now(),
+            } satisfies StreamChunk
+            yield {
+              type: EventType.RUN_FINISHED,
+              runId: 'run-1',
+              threadId: 'thread-1',
+              finishReason: 'stop',
+              timestamp: Date.now(),
+            } satisfies StreamChunk
+          },
+          hydrateGeneration,
+        },
+        persistence,
+      })
+
+      await client.generate({ prompt: 'test' })
+      await waitForCondition(() => {
+        expect(persistence.setItem).toHaveBeenCalled()
+      })
+      // An adapter is client-driven: the server hydrate path is never used.
+      expect(hydrateGeneration).not.toHaveBeenCalled()
+      expect(store.has('generation:local-hero')).toBe(true)
+    })
+
+    it('adopts the server snapshot for the video client too', async () => {
+      const { connection, hydrateGeneration } =
+        createHydratingConnection(completedHydration)
+      const client = new VideoGenerationClient({
+        threadId: 'thread-video',
+        connection,
+        persistence: true,
+      })
+
+      await waitForCondition(() => {
+        expect(client.getResumeSnapshot()).toMatchObject({ status: 'complete' })
+      })
+      expect(hydrateGeneration).toHaveBeenCalledWith('thread-video')
     })
   })
 })

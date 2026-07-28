@@ -20,7 +20,7 @@ import type {
  */
 export interface CreateGenerateSpeechOptions<TOutput = TTSResult> extends Pick<
   CreateGenerationOptions<SpeechGenerateInput, TTSResult, TOutput>,
-  'persistence' | 'initialResumeSnapshot'
+  'persistence' | 'threadId' | 'initialResumeSnapshot'
 > {
   /** Connect-based adapter for streaming transport (SSE, HTTP stream, custom) */
   connection?: ConnectConnectionAdapter

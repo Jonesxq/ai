@@ -1,4 +1,9 @@
-import type { ModelMessage, Scope, TokenUsage } from '@tanstack/ai'
+import type {
+  ModelMessage,
+  PersistedArtifactRef,
+  Scope,
+  TokenUsage,
+} from '@tanstack/ai'
 
 // Re-export the shared identity type so app code can import Scope from either
 // `@tanstack/ai` or `@tanstack/ai-persistence`. See {@link Scope} security notes:
@@ -150,6 +155,94 @@ export interface RunStore {
   findActiveRun: (threadId: string) => Promise<RunRecord | null>
 }
 
+export type GenerationJobStatus =
+  | 'running'
+  | 'complete'
+  | 'error'
+  | 'interrupted'
+
+/**
+ * A single generation job (one `generateImage` / `generateVideo` / … call).
+ *
+ * Its primary identity is `jobId` (the run/request id the activity mints) — a
+ * generation has no conversation, so `threadId` is only an OPTIONAL *link* to a
+ * chat when the product wants one (e.g. to correlate a generation with the
+ * thread that triggered it). Do not key generation state on the chat
+ * {@link RunStore} / {@link Scope.threadId}.
+ *
+ * `result` holds terminal result METADATA (ids, model, urls, a video jobId),
+ * never the media bytes — those live in a {@link BlobStore}. `artifacts` are the
+ * durable {@link PersistedArtifactRef}s, present only when byte storage is on.
+ *
+ * @property startedAt - Epoch ms when the job was first created.
+ * @property finishedAt - Epoch ms when the job reached a terminal status.
+ */
+export interface GenerationJobRecord {
+  jobId: string
+  /** Optional link to the chat conversation that triggered this generation. */
+  threadId?: string
+  /** `'image' | 'audio' | 'tts' | 'video' | 'transcription'`. */
+  activity: string
+  provider: string
+  model: string
+  status: GenerationJobStatus
+  startedAt: number
+  finishedAt?: number
+  error?: { message: string; code?: string }
+  /** Terminal result metadata (ids, model, urls). Never the media bytes. */
+  result?: unknown
+  /** Durable artifact references, when an artifacts + blobs backend is used. */
+  artifacts?: Array<PersistedArtifactRef>
+  usage?: TokenUsage
+}
+
+/**
+ * Durable store for generation job records — the generation counterpart to
+ * {@link RunStore}, keyed by `jobId` rather than a conversation `threadId`.
+ */
+export interface GenerationJobStore {
+  /**
+   * Create a job record, or return the existing one if `jobId` is already
+   * present (resume).
+   *
+   * INVARIANT (idempotency): a second call for a `jobId` returns the existing
+   * record unchanged; `startedAt`/`activity`/`provider`/`model`/`threadId` are
+   * not mutated. `status` defaults to `'running'` on first creation.
+   */
+  createOrResume: (
+    input: Pick<
+      GenerationJobRecord,
+      'jobId' | 'activity' | 'provider' | 'model' | 'startedAt'
+    > & { threadId?: string; status?: GenerationJobStatus },
+  ) => Promise<GenerationJobRecord>
+  /**
+   * Patch a job record's mutable fields.
+   *
+   * INVARIANT: patching a `jobId` that does not exist is a **no-op** — it must
+   * not throw and must not create a record.
+   */
+  update: (
+    jobId: string,
+    patch: Partial<
+      Pick<
+        GenerationJobRecord,
+        'status' | 'finishedAt' | 'error' | 'result' | 'artifacts' | 'usage'
+      >
+    >,
+  ) => Promise<void>
+  /** Return the job record for `jobId`, or `null` if none exists. */
+  get: (jobId: string) => Promise<GenerationJobRecord | null>
+  /**
+   * The most recent job linked to `threadId`, or `null`. OPTIONAL — callers
+   * feature-detect it (`store.findLatestForThread?.(threadId)`). Lets a
+   * server-authoritative client hydrate the last generation for a thread by the
+   * stable thread id, without handling a job id.
+   */
+  findLatestForThread?: (
+    threadId: string,
+  ) => Promise<GenerationJobRecord | null>
+}
+
 /** Lifecycle status of a human-in-the-loop interrupt. */
 export type InterruptStatus = 'pending' | 'resolved' | 'cancelled'
 
@@ -288,6 +381,20 @@ export function defineInterruptStore(store: InterruptStore): InterruptStore {
 }
 /** Type a {@link MetadataStore} implementation inline. */
 export function defineMetadataStore(store: MetadataStore): MetadataStore {
+  return store
+}
+/** Type a {@link GenerationJobStore} implementation inline. */
+export function defineGenerationJobStore(
+  store: GenerationJobStore,
+): GenerationJobStore {
+  return store
+}
+/** Type an {@link ArtifactStore} implementation inline. */
+export function defineArtifactStore(store: ArtifactStore): ArtifactStore {
+  return store
+}
+/** Type a {@link BlobStore} implementation inline. */
+export function defineBlobStore(store: BlobStore): BlobStore {
   return store
 }
 
@@ -430,6 +537,7 @@ export interface AIPersistenceStores {
   runs?: RunStore
   interrupts?: InterruptStore
   metadata?: MetadataStore
+  jobs?: GenerationJobStore
   artifacts?: ArtifactStore
   blobs?: BlobStore
 }
@@ -602,6 +710,7 @@ export type ComposedAIPersistenceStores<
 const storeKeys = [
   'messages',
   'runs',
+  'jobs',
   'interrupts',
   'metadata',
   'artifacts',
@@ -640,9 +749,10 @@ export function validateChatPersistenceStores(
 }
 
 /**
- * Generation middleware entrypoint rule: `runs` is required (run lifecycle is
- * the only generation state this middleware tracks). When artifact persistence
- * is used, `artifacts` and `blobs` must be provided together.
+ * Generation middleware entrypoint rule: `jobs` is required (the generation job
+ * lifecycle is keyed on `jobId`, not a chat conversation `threadId`). When
+ * artifact persistence is used, `artifacts` and `blobs` must be provided
+ * together.
  */
 export function validateGenerationPersistenceStores(
   persistence: AIPersistence,
@@ -655,8 +765,8 @@ export function validateGenerationPersistenceStores(
       'Generation artifact persistence requires both stores.artifacts and stores.blobs.',
     )
   }
-  if (!persistence.stores.runs) {
-    throw new Error('Generation persistence requires stores.runs.')
+  if (!persistence.stores.jobs) {
+    throw new Error('Generation persistence requires stores.jobs.')
   }
 }
 
@@ -669,6 +779,21 @@ export function validateReconstructChatStores(
   validatePersistenceStoreKeys(persistence)
   if (!persistence.stores.messages) {
     throw new Error('reconstructChat requires stores.messages.')
+  }
+}
+
+/**
+ * Server hydrate entrypoint rule for generation: `jobs` is required. The job
+ * store resolves the latest generation for a thread (or a specific job id), so
+ * a server-authoritative client can hydrate the last generation's status,
+ * result, and artifact refs on load.
+ */
+export function validateReconstructGenerationStores(
+  persistence: AIPersistence,
+): void {
+  validatePersistenceStoreKeys(persistence)
+  if (!persistence.stores.jobs) {
+    throw new Error('reconstructGeneration requires stores.jobs.')
   }
 }
 

@@ -23,7 +23,7 @@ export interface UseGenerateAudioOptions<
   TOutput = AudioGenerationResult,
 > extends Pick<
   UseGenerationOptions<AudioGenerateInput, AudioGenerationResult, TOutput>,
-  'persistence' | 'initialResumeSnapshot'
+  'persistence' | 'threadId' | 'initialResumeSnapshot'
 > {
   /** Connect-based adapter for streaming transport (SSE, HTTP stream, custom) */
   connection?: ConnectConnectionAdapter
