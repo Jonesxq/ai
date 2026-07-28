@@ -103,6 +103,32 @@ function createRunContextCaptureAdapter(chunks: Array<StreamChunk>): {
   return { adapter, connect, runContexts }
 }
 
+/**
+ * Storage adapter backed by a plain Map, seeded with raw (untyped) records the
+ * way real storage hands them back — the client re-validates whatever it reads.
+ */
+function createMapPersistence(seed: Record<string, unknown> = {}) {
+  const store = new Map(Object.entries(seed))
+  return {
+    store,
+    getItem: vi.fn(async (key: string) => {
+      return store.get(key) as GenerationResumeSnapshot | undefined
+    }),
+    setItem: vi.fn(async (key: string, value: GenerationResumeSnapshot) => {
+      store.set(key, value)
+    }),
+    removeItem: vi.fn(async (key: string) => {
+      store.delete(key)
+    }),
+  }
+}
+
+// Snapshot hydration and removal both run through promise queues detached from
+// the caller, so tests wait a macrotask for them to settle.
+function flushAsync(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 // Helper to create error stream chunks
 function createErrorChunks(message: string): Array<StreamChunk> {
   return [
@@ -237,11 +263,75 @@ describe('createGeneration', () => {
       await Promise.resolve()
 
       expect(connect).not.toHaveBeenCalled()
+      // An explicit `initialResumeSnapshot` seed takes precedence over
+      // storage, so the client skips its hydration read entirely.
       expect(getItem).not.toHaveBeenCalled()
       expect(gen.isLoading).toBe(false)
       expect(gen.status).toBe('idle')
       // The persisted snapshot remains exposed as read-only state.
       expect(gen.resumeState).toEqual(snapshot.resumeState)
+    })
+  })
+
+  describe('resume snapshot persistence', () => {
+    it('hydrates a persisted snapshot into resumeSnapshot on creation', async () => {
+      const persistence = createMapPersistence({
+        'generation:hydrate-me': {
+          schemaVersion: 1,
+          resumeState: { threadId: 'thread-stored', runId: 'run-stored' },
+          status: 'running',
+        },
+      })
+
+      const gen = createGeneration({
+        id: 'hydrate-me',
+        connection: createMockConnectionAdapter(),
+        persistence,
+      })
+
+      // Hydration is async — the storage read is awaited off the constructor.
+      expect(gen.resumeSnapshot).toBeUndefined()
+      await flushAsync()
+
+      expect(persistence.getItem).toHaveBeenCalledTimes(1)
+      expect(persistence.getItem).toHaveBeenCalledWith('generation:hydrate-me')
+      expect(gen.resumeSnapshot).toEqual({
+        schemaVersion: 1,
+        resumeState: { threadId: 'thread-stored', runId: 'run-stored' },
+        status: 'running',
+      })
+      expect(gen.resumeState).toEqual({
+        threadId: 'thread-stored',
+        runId: 'run-stored',
+      })
+    })
+
+    it('clears resumeSnapshot and removes the persisted record on reset', async () => {
+      const persistence = createMapPersistence({
+        'generation:reset-me': {
+          schemaVersion: 1,
+          resumeState: null,
+          status: 'complete',
+        },
+      })
+
+      const gen = createGeneration({
+        id: 'reset-me',
+        connection: createMockConnectionAdapter(),
+        persistence,
+      })
+
+      await flushAsync()
+      expect(gen.resumeSnapshot).toBeDefined()
+
+      gen.reset()
+
+      expect(gen.resumeSnapshot).toBeUndefined()
+      expect(gen.resumeState).toBeNull()
+
+      await flushAsync()
+      expect(persistence.removeItem).toHaveBeenCalledWith('generation:reset-me')
+      expect(persistence.store.has('generation:reset-me')).toBe(false)
     })
   })
 

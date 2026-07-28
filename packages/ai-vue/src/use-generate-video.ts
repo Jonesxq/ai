@@ -42,9 +42,9 @@ export interface UseGenerateVideoOptions<TOutput = VideoGenerateResult> {
   body?: Record<string, any>
   /** Display options for TanStack AI Devtools. */
   devtools?: AIDevtoolsDisplayOptions
-  /** Server-side lightweight generation state persistence. */
+  /** Client-side storage adapter for the lightweight resume snapshot. Written under `generation:<id>` as a run streams and read back on mount. Media bytes are never stored. */
   persistence?: GenerationPersistence
-  /** Initial lightweight resume snapshot restored by the app (read-only state). */
+  /** Explicit resume-snapshot seed for apps that manage storage themselves; skips automatic hydration from `persistence`. Later run events merge into it. */
   initialResumeSnapshot?: GenerationResumeSnapshot
   /**
    * Callback when video generation completes. Can optionally return a transformed value.
@@ -92,11 +92,11 @@ export interface UseGenerateVideoReturn<TOutput = VideoGenerateResult> {
   reset: () => void
   /** Lightweight generation resume snapshot, if one is available */
   resumeSnapshot: DeepReadonly<ShallowRef<GenerationResumeSnapshot | undefined>>
-  /** Observed run/cursor metadata from the snapshot (read-only state) */
+  /** Identity of the in-flight run while one is streaming, or null after it ends */
   resumeState: DeepReadonly<ShallowRef<GenerationResumeState | null>>
-  /** Pending persisted artifact references observed during generation/replay */
+  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
   pendingArtifacts: DeepReadonly<ShallowRef<Array<GenerationPendingArtifact>>>
-  /** Final persisted artifact references observed from a replayed result */
+  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
   resultArtifacts: DeepReadonly<ShallowRef<Array<PersistedArtifactRef>>>
 }
 
@@ -161,10 +161,10 @@ export function useGenerateVideo<TTransformed = void>(
     options.initialResumeSnapshot?.resumeState ?? null,
   )
   const pendingArtifacts = shallowRef<Array<GenerationPendingArtifact>>(
-    options.initialResumeSnapshot?.pendingArtifacts ?? [],
+    options.initialResumeSnapshot?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS,
   )
   const resultArtifacts = shallowRef<Array<PersistedArtifactRef>>(
-    options.initialResumeSnapshot?.result?.artifacts ?? [],
+    options.initialResumeSnapshot?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS,
   )
   let disposed = false
 
@@ -174,8 +174,10 @@ export function useGenerateVideo<TTransformed = void>(
     if (disposed) return
     resumeSnapshot.value = snapshot
     resumeState.value = snapshot?.resumeState ?? null
-    pendingArtifacts.value = snapshot?.pendingArtifacts ?? []
-    resultArtifacts.value = snapshot?.result?.artifacts ?? []
+    pendingArtifacts.value =
+      snapshot?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS
+    resultArtifacts.value =
+      snapshot?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS
   }
 
   // Conditional spread on `body`: `VideoGenerationClientOptions.body` is a
@@ -319,3 +321,8 @@ export function useGenerateVideo<TTransformed = void>(
     resultArtifacts: readonly(resultArtifacts),
   }
 }
+
+// Shared fallbacks so a snapshot change that leaves the artifact lists empty
+// reassigns the same reference and doesn't trigger dependent watchers.
+const EMPTY_PENDING_ARTIFACTS: Array<GenerationPendingArtifact> = []
+const EMPTY_RESULT_ARTIFACTS: Array<PersistedArtifactRef> = []

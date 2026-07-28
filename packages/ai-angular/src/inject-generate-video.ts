@@ -37,7 +37,9 @@ export interface InjectGenerateVideoOptions<TOutput = VideoGenerateResult> {
   id?: string
   body?: ReactiveOption<Record<string, any>>
   devtools?: AIDevtoolsDisplayOptions
+  /** Client-side storage adapter for the lightweight resume snapshot. Written under `generation:<id>` as a run streams and read back on mount. Media bytes are never stored. */
   persistence?: GenerationPersistence
+  /** Explicit resume-snapshot seed for apps that manage storage themselves; skips automatic hydration from `persistence`. Later run events merge into it. */
   initialResumeSnapshot?: GenerationResumeSnapshot
   onResult?: (result: VideoGenerateResult) => TOutput | null | void
   onError?: (error: Error) => void
