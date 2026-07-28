@@ -180,23 +180,12 @@ export type {
   ToolExecRequest,
 } from './remote-tools'
 
-// Resumable run event-log — the primitive that lets a trigger start a run and
-// return while a durable orchestrator drives it and clients tail from a cursor.
-export { InMemoryRunEventLog, isTerminalRunStatus } from './run-log'
-export type {
-  RunEventLog,
-  RunRecord,
-  RunEvent,
-  RunStatus,
-  TerminalRunStatus,
-  RunError,
-  RunEventLogReadOptions,
-} from './run-log'
-
-// Run driver — pump a chat() stream into the event-log so a trigger returns
+// Run driver — pumps a chat() stream into core's `StreamDurability` and
+// records run status/lifecycle in core's `RunStore`, so a trigger returns
 // immediately while a durable orchestrator drives the run and clients tail it.
 export { pipeToRunLog, RunController } from './run'
 export type {
+  RunDeps,
   PipeToRunLogOptions,
   RunControllerStartInput,
   RunHandle,
