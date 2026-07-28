@@ -61,6 +61,11 @@ export async function POST(request: Request) {
 - The backend must return a non-empty `Stream-Next-Offset` header on create,
   append, and close. A missing header fails loudly. The adapter never guesses an
   offset.
+- `durableStream` rejects a caller-supplied `append(chunks, { offsets })`: its
+  offset embeds a backend-assigned cursor, so it throws before creating
+  anything rather than honoring a caller's choice. See
+  [Custom Durability Adapter](./custom-adapter#handling-caller-supplied-offsets)
+  for adapters that can support it.
 
 ## Attaching to a run by id
 
@@ -177,8 +182,15 @@ the `id` of an NDJSON `{ id, chunk }` envelope). For every appended batch:
 4. a resume reads strictly after the supplied offset.
 
 Core never derives an offset from an array index and never stamps one onto the
-`StreamChunk`. See [Custom Durability Adapter](./custom-adapter) to build your
-own.
+`StreamChunk`.
+
+`append` also takes an optional `{ offsets }`: pass it and the call becomes an
+idempotent upsert, appending the same chunk at the same offset twice leaves
+one entry instead of two. Most integrations never need this; it exists for
+callers that pick their own offsets. `memoryStream` supports it, `durableStream`
+rejects it (see above). See
+[Custom Durability Adapter](./custom-adapter#handling-caller-supplied-offsets)
+to build your own.
 
 ## Cloudflare Durable Streams
 

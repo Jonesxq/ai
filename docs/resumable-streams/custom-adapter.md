@@ -24,7 +24,7 @@ hand it. You implement four methods:
 | Method | Job |
 | --- | --- |
 | `resumeFrom()` | Return the resume offset from this request, or `null` for a fresh run. |
-| `append(chunks)` | Persist a batch before delivery; return one offset per chunk, in order. |
+| `append(chunks, opts)` | Persist a batch before delivery; return one offset per chunk, in order. See [Handling caller-supplied offsets](#handling-caller-supplied-offsets) for `opts.offsets`. |
 | `read(offset, signal)` | Replay chunks strictly after `offset`. |
 | `close()` | Mark the run complete and wake any parked readers. |
 
@@ -46,6 +46,10 @@ Get these wrong and resume breaks in subtle ways:
   stops the wait.
 - You do not handle ordering or append-before-deliver. Core buffers, calls
   `append`, and only forwards a chunk once you return its offset.
+- **`append` takes an optional second argument, `opts.offsets`.** Ignoring it
+  silently is the one broken choice: it type-checks but throws away the
+  idempotency the parameter exists for. See
+  [Handling caller-supplied offsets](#handling-caller-supplied-offsets).
 
 ## Implement it
 
@@ -58,8 +62,16 @@ import type { StreamChunk, StreamDurability } from '@tanstack/ai'
 
 // Your backend, one append-only log per run. Back it with Redis Streams, a
 // Postgres table, a queue. Anything that returns a stable cursor per entry.
+// `upsert` writes at caller-chosen cursors, replacing rather than duplicating
+// an entry that already exists at that cursor (a Postgres
+// `INSERT ... ON CONFLICT (cursor) DO UPDATE`, or a Redis `XADD` with an
+// explicit, deduplicated ID).
 interface RunLog {
   append: (chunks: Array<StreamChunk>) => Promise<Array<string>>
+  upsert: (
+    chunks: Array<StreamChunk>,
+    cursors: Array<string>,
+  ) => Promise<Array<string>>
   readAfter: (
     cursor: string | null,
   ) => Promise<Array<{ cursor: string; chunk: StreamChunk }>>
@@ -92,7 +104,8 @@ export function customDurability(
 
   return {
     resumeFrom: () => resume,
-    append: (chunks) => log.append(chunks),
+    append: (chunks, opts) =>
+      opts?.offsets ? log.upsert(chunks, opts.offsets) : log.append(chunks),
     close: () => log.markComplete(),
     read: async function* (offset, signal) {
       // '-1' / 'now' are the from-start / from-tail join sentinels.
@@ -134,6 +147,39 @@ export async function POST(request: Request) {
 
 For NDJSON, swap `toServerSentEventsResponse` for `toHttpResponse`. The adapter
 is identical; only the wire encoding changes.
+
+## Handling caller-supplied offsets
+
+A caller can invoke `append(chunks, { offsets })` with offsets it chose itself
+instead of letting your adapter assign them. You have two honest options:
+
+**Upsert**, if your store can write at a caller-chosen key: appending the same
+chunk at the same offset twice must leave one entry, not two. That is what
+`log.upsert` does in the example above, and what `memoryStream` does
+internally.
+
+**Reject**, if your store assigns its own cursor on write and can't honor a
+caller's choice. This is what `durableStream` does: its offsets embed a
+backend-assigned cursor, so it throws before creating anything rather than
+silently dropping the caller's intent.
+
+```ts ignore
+append: (chunks, opts) => {
+  if (opts?.offsets) {
+    throw new Error('this adapter does not support caller-supplied offsets')
+  }
+  return log.append(chunks)
+},
+```
+
+Either is fine. The one broken choice is accepting `opts.offsets` in the
+signature and then ignoring it: the call type-checks, but the idempotency the
+caller asked for silently disappears.
+
+When you do implement the upsert, the contract requires `opts.offsets` to be
+the same length as `chunks`, one offset per chunk in order, same as the
+return value. `memoryStream` validates this defensively and throws on a
+mismatch; do the same in your own adapter rather than trusting the caller.
 
 ## Type your offsets (optional)
 
