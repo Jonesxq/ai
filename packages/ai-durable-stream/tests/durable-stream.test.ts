@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EventType, toServerSentEventsResponse } from '@tanstack/ai'
-import { durableStream } from '../src'
+import { DurableStreamError, durableStream } from '../src'
 import type { StreamChunk } from '@tanstack/ai'
 import type { DurableStreamOffset } from '../src'
 
@@ -460,6 +460,21 @@ describe('durableStream official HTTP protocol', () => {
     await expect(durability.append([textChunk('x')])).rejects.toThrow(
       /Stream-Next-Offset/,
     )
+  })
+
+  it('rejects caller-supplied append offsets', async () => {
+    const server = makeProtocolServer()
+    const durability = durableStream(
+      new Request('https://app.test/api/chat?runId=run-caller-offsets'),
+      { server: 'https://ds.test', fetch: server.fetchStub },
+    )
+
+    await expect(
+      durability.append([textChunk('x')], { offsets: ['-1'] }),
+    ).rejects.toThrow(DurableStreamError)
+    await expect(
+      durability.append([textChunk('x')], { offsets: ['-1'] }),
+    ).rejects.toThrow(/offsets/)
   })
 
   it('parses conforming id-less data and control events', async () => {

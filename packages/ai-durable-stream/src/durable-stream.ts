@@ -534,7 +534,13 @@ export function durableStream(
 
   return {
     resumeFrom: () => resumeOffset,
-    append: async (chunks) => {
+    append: async (chunks, opts) => {
+      if (opts?.offsets !== undefined) {
+        throw new DurableStreamError(
+          'durableStream does not yet support caller-supplied offsets; ' +
+            'required for sandbox run-driver takeover (see Phase 2)',
+        )
+      }
       if (chunks.length === 0) return []
       const batchStartOffset = appendTailOffset ?? (await ensureCreated())
       const firstSeq = nextSeq
