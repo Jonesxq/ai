@@ -477,6 +477,27 @@ describe('durableStream official HTTP protocol', () => {
     ).rejects.toThrow(/offsets/)
   })
 
+  it('rejects caller-supplied offsets before creating the backend stream', async () => {
+    const server = makeProtocolServer()
+    const durability = durableStream(
+      new Request('https://app.test/api/chat?runId=run-caller-offsets-order'),
+      { server: 'https://ds.test', fetch: server.fetchStub },
+    )
+
+    await expect(
+      durability.append([textChunk('x')], { offsets: ['-1'] }),
+    ).rejects.toThrow(DurableStreamError)
+
+    // The offsets guard must run before ensureCreated() issues its PUT, so a
+    // rejected call leaves no created-but-unused stream behind on the
+    // backend. Asserting the rejection alone (as the test above does) would
+    // still pass if the guard were moved after ensureCreated() — only a
+    // zero-fetch-calls assertion pins the ordering. Do not remove this as
+    // "redundant" with the rejection test; it is the only thing catching
+    // that specific regression.
+    expect(server.fetchStub).toHaveBeenCalledTimes(0)
+  })
+
   it('parses conforming id-less data and control events', async () => {
     const server = makeProtocolServer()
     const durability = durableStream(
