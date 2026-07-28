@@ -12,13 +12,25 @@
  * a thrown stream error is recorded as a synthesized `RUN_ERROR` event plus the
  * record's `error` field. Tailing clients therefore always observe failures;
  * {@link pipeToRunLog} never rejects.
+ *
+ * "Never rejects" is load-bearing rather than aspirational: {@link RunController}
+ * consumes the returned promise fire-and-forget, so a rejection would be an
+ * unhandled rejection (process-fatal on modern Node, instance-fatal inside a
+ * Durable Object) with nobody to report it to. Every store/log call is therefore
+ * individually guarded, and because absorbing a failure silently in the one
+ * module whose premise is that nobody is listening would make the failure
+ * invisible, each guard reports through the optional {@link RunDeps.logger}.
  */
 import { EventType } from '@tanstack/ai'
+import { toRunErrorPayload } from '@tanstack/ai/adapter-internals'
+import type { InternalLogger } from '@tanstack/ai/adapter-internals'
 import type {
+  RunError,
   RunRecord,
   RunStore,
   StreamChunk,
   StreamDurability,
+  TerminalRunStatus,
 } from '@tanstack/ai'
 
 /** Whether a chunk is the terminal error event the chat engine emits. */
@@ -28,16 +40,44 @@ function isRunErrorChunk(
   return chunk.type === EventType.RUN_ERROR
 }
 
-/** Render an unknown thrown value as a stable error message. */
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+/**
+ * Narrow a thrown value (or a `RUN_ERROR` chunk's payload) to the record's
+ * structured error, keeping the provider's `code` when it supplies one: a bare
+ * message is prose that changes between model versions, while `code` is what a
+ * consumer branches on to retry, escalate, or show specific UI.
+ */
+function toRunError(error: unknown): RunError {
+  const payload = toRunErrorPayload(error)
+  return {
+    message: payload.message,
+    ...(payload.code === undefined ? {} : { code: payload.code }),
+  }
+}
+
+/**
+ * Fold a secondary failure into the primary error, mirroring `combineFailures`
+ * in `packages/ai/src/stream-to-response.ts`: the primary cause stays first and
+ * keeps its `code`, and the phase that produced the secondary failure is named.
+ * The secondary must never *replace* the primary: the provider's error is what
+ * an operator needs, and a failure while recording it is the lesser fact.
+ */
+function withSecondaryFailure(
+  primary: RunError,
+  secondary: unknown,
+  phase: string,
+): RunError {
+  return {
+    ...primary,
+    message: `${primary.message}; ${phase}: ${toRunError(secondary).message}`,
+  }
 }
 
 /** Build the synthetic RUN_ERROR chunk appended when the stream throws. */
-function syntheticRunError(message: string): StreamChunk {
-  const chunk: { type: EventType.RUN_ERROR; message: string } = {
+function syntheticRunError(error: RunError): StreamChunk {
+  const chunk: { type: EventType.RUN_ERROR; message: string; code?: string } = {
     type: EventType.RUN_ERROR,
-    message,
+    message: error.message,
+    ...(error.code === undefined ? {} : { code: error.code }),
   }
   return chunk
 }
@@ -48,6 +88,13 @@ export interface RunDeps {
   runs: RunStore
   /** Delivery-durable event log the run's chunks are appended to. */
   durability: StreamDurability
+  /**
+   * Optional sink for failures this driver absorbs rather than rejecting with.
+   * A detached run has no caller to receive an error, so without a logger a
+   * failing store or event log is invisible to an operator. Same
+   * `logger?.errors(...)` contract core uses in `stream-to-response.ts`.
+   */
+  logger?: InternalLogger
 }
 
 export interface PipeToRunLogOptions extends RunDeps {
@@ -57,35 +104,99 @@ export interface PipeToRunLogOptions extends RunDeps {
   signal?: AbortSignal
 }
 
-/** Re-read the now-terminal record; the run was just driven, so it must exist. */
-async function reread(runs: RunStore, runId: string): Promise<RunRecord> {
-  const latest = await runs.get(runId)
-  if (!latest) throw new Error(`run: record for "${runId}" vanished mid-run`)
-  return latest
+/** Everything {@link finish} needs, including the fields it rebuilds a record from. */
+interface FinishContext {
+  runs: RunStore
+  durability: StreamDurability
+  runId: string
+  threadId: string
+  startedAt: number
+  logger?: InternalLogger
 }
 
+/**
+ * Record the terminal status, terminalize the event log, and answer with the
+ * run's final record.
+ *
+ * TOTAL BY CONSTRUCTION: every step is individually guarded, so this never
+ * throws and never rejects. Two consequences the guards buy:
+ *
+ * - `durability.close()` runs on EVERY exit path, including a failed `update`.
+ *   Skipping it would wedge the record at `running` *and* park every live
+ *   tailer forever, because a durability `read` only ends once the log closes.
+ * - The re-read of the record is best effort. An eventually-consistent or
+ *   read-replica store may answer `null` for a run that was just driven, which
+ *   must not turn a successful run into a rejection; the locally rebuilt record
+ *   is returned instead. It is also preferred outright when `update` failed,
+ *   since the store then still holds the stale `running` row.
+ */
 async function finish(
-  runs: RunStore,
-  durability: StreamDurability,
-  runId: string,
-  status: 'completed' | 'failed' | 'aborted',
-  error?: string,
+  ctx: FinishContext,
+  status: TerminalRunStatus,
+  error?: RunError,
 ): Promise<RunRecord> {
-  await runs.update(runId, {
+  const { runs, durability, runId, logger } = ctx
+  const finishedAt = Date.now()
+  const patch = {
     status,
-    finishedAt: Date.now(),
-    ...(error !== undefined ? { error } : {}),
-  })
-  // Terminalize the event log so live readers stop waiting.
-  await durability.close()
-  return reread(runs, runId)
+    finishedAt,
+    ...(error === undefined ? {} : { error }),
+  }
+  const local: RunRecord = {
+    runId,
+    threadId: ctx.threadId,
+    startedAt: ctx.startedAt,
+    ...patch,
+  }
+
+  let recorded = true
+  try {
+    await runs.update(runId, patch)
+  } catch (updateError) {
+    recorded = false
+    logger?.errors('run: recording the terminal run record failed', {
+      runId,
+      status,
+      error: updateError,
+    })
+  }
+
+  try {
+    await durability.close()
+  } catch (closeError) {
+    logger?.errors('run: closing the run event log failed', {
+      runId,
+      status,
+      error: closeError,
+    })
+  }
+
+  if (!recorded) return local
+
+  try {
+    const latest = await runs.get(runId)
+    if (latest !== null) return latest
+    logger?.errors('run: record vanished before the terminal re-read', {
+      runId,
+      status,
+    })
+  } catch (getError) {
+    logger?.errors('run: re-reading the terminal run record failed', {
+      runId,
+      status,
+      error: getError,
+    })
+  }
+  return local
 }
 
 /**
  * Open the run, append every chunk from `stream`, and finish with the right
  * terminal status. Resolves with the final {@link RunRecord} and never rejects:
  * a thrown stream error is surfaced as a `RUN_ERROR` event plus the record's
- * `error`, which is what tailing clients see.
+ * `error`, which is what tailing clients see. A store or event-log failure
+ * along the way is logged through {@link RunDeps.logger} and still terminalizes
+ * the run rather than escaping to a caller that does not exist.
  *
  * - normal completion → `completed`
  * - a `RUN_ERROR` chunk → append it, then `failed`
@@ -96,27 +207,52 @@ export async function pipeToRunLog(
   stream: AsyncIterable<StreamChunk>,
   opts: PipeToRunLogOptions,
 ): Promise<RunRecord> {
-  const { runs, durability, runId, threadId, signal } = opts
-  await runs.createOrResume({ runId, threadId, startedAt: Date.now() })
-  if (signal?.aborted) return finish(runs, durability, runId, 'aborted')
-
-  try {
-    for await (const chunk of stream) {
-      if (signal?.aborted) return finish(runs, durability, runId, 'aborted')
-      await durability.append([chunk])
-      if (isRunErrorChunk(chunk)) {
-        return finish(runs, durability, runId, 'failed', chunk.message)
-      }
-    }
-  } catch (error) {
-    // Detached run: no caller to throw to. Record the failure in the log so
-    // tailing clients observe it, then return — do NOT rethrow.
-    const message = messageOf(error)
-    await durability.append([syntheticRunError(message)])
-    return finish(runs, durability, runId, 'failed', message)
+  const { runs, durability, runId, threadId, signal, logger } = opts
+  const ctx: FinishContext = {
+    runs,
+    durability,
+    runId,
+    threadId,
+    startedAt: Date.now(),
+    ...(logger === undefined ? {} : { logger }),
   }
 
-  return finish(runs, durability, runId, 'completed')
+  try {
+    // Inside the `try` so a store failure at creation is handled like any
+    // other: recorded as a failed run with a terminalized log, not rejected.
+    await runs.createOrResume({ runId, threadId, startedAt: ctx.startedAt })
+    if (signal?.aborted) return finish(ctx, 'aborted')
+
+    for await (const chunk of stream) {
+      if (signal?.aborted) return finish(ctx, 'aborted')
+      await durability.append([chunk])
+      if (isRunErrorChunk(chunk)) {
+        return finish(
+          ctx,
+          'failed',
+          toRunError({ message: chunk.message, code: chunk.code }),
+        )
+      }
+    }
+  } catch (streamError) {
+    // Detached run: no caller to throw to. Record the failure in the log so
+    // tailing clients observe it, then return — do NOT rethrow.
+    let recorded = toRunError(streamError)
+    logger?.errors('run: the run stream failed', { runId, error: streamError })
+    try {
+      await durability.append([syntheticRunError(recorded)])
+    } catch (appendError) {
+      // The recovery append is itself a failure path. It must not destroy the
+      // cause it was recording, so the provider's error stays primary and this
+      // secondary failure is merged in and logged separately.
+      const phase = 'appending the synthesized RUN_ERROR failed'
+      logger?.errors(`run: ${phase}`, { runId, error: appendError })
+      recorded = withSecondaryFailure(recorded, appendError, phase)
+    }
+    return finish(ctx, 'failed', recorded)
+  }
+
+  return finish(ctx, 'completed')
 }
 
 export interface RunControllerStartInput {
@@ -139,13 +275,24 @@ export interface RunHandle {
  * (e.g. inside a `ctx.waitUntil`). Holds no run state of its own beyond the set
  * of currently in-flight `done` promises.
  *
- * A single instance holds one `durability`, and a {@link StreamDurability} is
- * bound to one run (e.g. `memoryStream(request)` resolves its `runId` from the
- * request). Concurrent `start()` calls therefore drive at most one run safely
- * at a time: parallel runs would interleave chunks into the same log, and
- * whichever run terminates first calls `durability.close()` and terminalizes
- * the others' log too. Safe concurrency would require a per-run `durability`;
- * that is left to a later phase.
+ * IDENTITY BINDING HAZARD (bites at concurrency 1, not just under load).
+ * `start({ runId })` accepts an arbitrary `runId`, while `deps.durability` is
+ * bound to whatever run it was constructed for (e.g. `memoryStream(request)`
+ * resolves its `runId` from the request). Nothing cross-checks the two, so a
+ * mismatch writes the lifecycle record under one id and the events under
+ * another, silently: no error is raised and `done` still resolves
+ * `'completed'`, yet a client tailing the run it asked for sees an empty log.
+ * A single call with the wrong `runId` is enough; concurrency is not required.
+ *
+ * Concurrency then compounds it. One instance holds one `durability`, so
+ * parallel runs interleave their chunks into the same log and whichever run
+ * terminates first calls `durability.close()`, terminalizing every other run's
+ * log too. Both problems want the same fix: a per-run `durability` (a factory
+ * on {@link RunDeps} instead of an instance), which is left to a later phase.
+ *
+ * Note the API surface itself advertises multi-run support it does not have:
+ * `status(runId)` is keyed by run, while `attach(fromOffset)` is not, even
+ * though the log it reads is per-run.
  */
 export class RunController {
   private readonly inFlight = new Set<Promise<RunRecord>>()
@@ -164,7 +311,14 @@ export class RunController {
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
     })
     this.inFlight.add(done)
-    void done.finally(() => this.inFlight.delete(done))
+    // Two-argument `then`, deliberately NOT `.finally`: `.finally` returns a new
+    // promise that adopts any rejection, and discarding that promise would make
+    // the rejection unhandled (fatal on modern Node defaults, and it kills the
+    // instance inside a Durable Object). Handling both outcomes here means the
+    // derived promise always settles fulfilled, so nothing is left unhandled
+    // even if `pipeToRunLog`'s "never rejects" contract is ever broken.
+    const forget = (): void => void this.inFlight.delete(done)
+    void done.then(forget, forget)
     return { runId: input.runId, done }
   }
 
@@ -182,11 +336,20 @@ export class RunController {
   }
 
   /**
-   * Await every currently in-flight run's `done` promise. Safe today because
-   * this controller drives one run at a time (see the class doc); it does not
-   * imply multiple concurrent runs are isolated from one another.
+   * Await every currently in-flight run's `done` promise.
+   *
+   * Only meaningful while callers start one run at a time, which nothing here
+   * enforces: `inFlight` is a plain Set and `start()` has no guard, so N
+   * concurrent runs are accepted and share one `durability` (see the class
+   * doc). It also does not imply concurrent runs are isolated from one another.
+   *
+   * Uses `allSettled` rather than `all` because this is typically awaited
+   * inside a `ctx.waitUntil`: `all` would reject on the first failure, abandon
+   * the wait on every other run, and surface that rejection to the platform.
+   * Draining is about keeping the isolate alive until the runs settle; each
+   * run's own outcome is already recorded in its record and log.
    */
   async drain(): Promise<void> {
-    await Promise.all([...this.inFlight])
+    await Promise.allSettled([...this.inFlight])
   }
 }
