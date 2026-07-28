@@ -442,15 +442,26 @@ Locks are separate from state and are **not** a `stores` key: wire a
 
 The `runs` store in that list is typed against `RunStore`, which ships in
 `@tanstack/ai` alongside `RunRecord`, `RunStatus`, `TerminalRunStatus`,
-`isTerminalRunStatus`, `defineRunStore`, and `InMemoryRunStore`. A `RunRecord`
-tracks one run: `runId`, `threadId`, `status`, `startedAt`, plus optional
-`finishedAt`, `error`, `usage`, `sandboxKey`, and `detachedSince`. Only
+`RunError`, `isTerminalRunStatus`, `defineRunStore`, and `InMemoryRunStore`. A
+`RunRecord` tracks one run: `runId`, `threadId`, `status`, `startedAt`, plus
+optional `finishedAt`, `error`, `usage`, `sandboxKey`, and `detachedSince`.
+`error` is a structured `RunError` (`{ message: string, code?: string }`), not
+a bare string: `message` is the provider's prose, `code` is the stable,
+machine-branchable classification a consumer switches on. Only
 `createOrResume`, `update`, and `get` are required on a `RunStore`;
 `listByThread`, `listReclaimable`, and `findActiveRun` are optional, so a
 backend can leave any of them out and callers feature-detect
 (`store.findActiveRun?.(threadId)`). Shape your own store with
 `defineRunStore` for autocomplete without a separate `: RunStore` annotation,
-matching `defineLock`.
+matching `defineLock`; `defineRunStore<const T extends RunStore>(store: T): T`
+returns the argument's own type, so an optional method your store implements
+stays known-present on the result instead of collapsing to `| undefined`.
+`isTerminalRunStatus(status)` is a type predicate narrowing `RunStatus` to
+`TerminalRunStatus`, so code inside the guard can pass `status` where a
+`TerminalRunStatus` is required without a cast. When a backend omits an
+optional `RunStore` method, declare the omission when running the conformance
+testkit (`ai-persistence/stores`'s `skipMethods` option) rather than leaving it
+undeclared.
 
 **Full guidance lives in the package's own skills** — start at
 `node_modules/@tanstack/ai-persistence/skills/ai-persistence/SKILL.md`,

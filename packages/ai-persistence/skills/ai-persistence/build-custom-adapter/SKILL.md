@@ -58,7 +58,12 @@ look records up by exactly these:
   `interrupts(threadId, requestedAt)` for the listing paths. If the backend
   implements `listReclaimable`, also index `runs(status, detachedSince)`; that
   is the query it runs.
-- `run.error` is a plain string, not an error object. `run.status` is one of
+- `run.error` is a structured `RunError` (`{ message: string, code?: string }`),
+  not a bare string. `message` is the provider's prose; `code` is the stable,
+  machine-branchable classification an operator filters and groups by. In a
+  SQL-backed table, store it as two columns (`error`, `error_code`) rather than
+  one JSON blob, moved together in `update` so a later code-less failure can
+  never leave a stale `code` from an earlier one behind. `run.status` is one of
   `'running' | 'interrupted' | 'completed' | 'failed' | 'aborted'`;
   `'interrupted'` is a pause, not terminal, and only
   `'completed' | 'failed' | 'aborted'` are terminal.
@@ -90,8 +95,10 @@ history. They are engine-independent:
    and leave the rest off the object.
 
 Row mappers omit absent optionals
-(`...(row.error != null ? { error: row.error } : {})`) so records compare
-cleanly against the reference in-memory backend.
+(`...(row.sandbox_key != null ? { sandboxKey: row.sandbox_key } : {})`) so
+records compare cleanly against the reference in-memory backend. For a
+two-column `error`/`error_code` layout, the mapper is
+`...(row.error != null ? { error: { message: row.error, ...(row.error_code != null ? { code: row.error_code } : {}) } } : {})`.
 
 ## 4. Write `src/lib/chat-persistence.ts`
 
@@ -162,7 +169,9 @@ function createRunStore(db: Pool): RunStore {
       )
     },
     // ... update (no-op on unknown id, patches sandboxKey/detachedSince/
-    // cancelRequested the same way as status/finishedAt/error/usage),
+    // cancelRequested the same way as status/finishedAt/usage; writes
+    // patch.error as two columns, error = patch.error.message and
+    // error_code = patch.error.code ?? null, together in the same call),
     // findActiveRun (latest 'running', optional), listByThread (ascending
     // by startedAt, optional), listReclaimable (status = 'running' AND
     // detachedSince <= now - ttlMs, inclusive cutoff, optional)
@@ -289,3 +298,9 @@ Point it at a throwaway database and reset between runs. Declare intentional
 omissions with `skip: ['metadata']` — it accepts only
 `'messages' | 'runs' | 'interrupts' | 'metadata'`, never `'locks'`, which is not
 a state store.
+
+If your recipe leaves an optional `runs` method
+(`findActiveRun`/`listByThread`/`listReclaimable`) unimplemented, declare it
+separately with `skipMethods`, e.g. `{ skipMethods: ['runs.listByThread'] }`.
+An omitted method that is not declared fails the suite instead of silently
+passing.

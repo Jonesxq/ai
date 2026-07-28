@@ -341,11 +341,15 @@ Core primitives (`@tanstack/ai-sandbox`, transport- and runtime-agnostic):
   (`@tanstack/ai`) durable seams: a `RunStore` for the run's lifecycle record
   (the same store `withPersistence` uses for chat history) and a
   `StreamDurability` for its event log (`memoryStream` or `durableStream`).
-  `pipeToRunLog(stream, { runs, durability, runId, threadId, signal })` pumps a
-  `chat()` stream into both and **never rejects**: a thrown stream error becomes
-  a terminal `RUN_ERROR` event plus the record's `error`, so a detached client
-  always observes failures. `threadId` is required. `RunController` wraps a
-  fixed `RunDeps = { runs, durability }`:
+  `pipeToRunLog(stream, { runs, durability, runId, threadId, signal, logger })`
+  pumps a `chat()` stream into both and is **total**: every store/event-log
+  call is individually guarded, so it never throws and never rejects. A
+  thrown stream error becomes a terminal `RUN_ERROR` event plus the record's
+  `error`, so a detached client always observes failures, and a failing store
+  write or a failing durability close is recorded through the optional
+  `logger` (same `logger?.errors(...)` contract core uses) rather than
+  silently absorbed. `threadId` is required. `RunController` wraps a fixed
+  `RunDeps = { runs, durability, logger? }`:
 
   ```typescript
   import { RunController } from '@tanstack/ai-sandbox'
@@ -359,9 +363,10 @@ Core primitives (`@tanstack/ai-sandbox`, transport- and runtime-agnostic):
   const handle = controller.start({ runId, threadId, stream })
   // handle.runId, handle.done (resolves with the terminal RunRecord)
 
-  for await (const { offset, chunk } of controller.attach(fromOffset)) {
+  for await (const { offset, chunk } of controller.attach(fromOffset, signal)) {
     // fromOffset is an opaque string the durability adapter produced; for
-    // memoryStream, '-1' replays from the start.
+    // memoryStream, '-1' replays from the start. `signal` is optional and
+    // stops tailing when it aborts.
   }
 
   await controller.drain() // await every in-flight run, e.g. inside waitUntil
@@ -369,8 +374,12 @@ Core primitives (`@tanstack/ai-sandbox`, transport- and runtime-agnostic):
 
   Terminal statuses are `'completed' | 'failed' | 'aborted'` (core's
   `TerminalRunStatus`); a run may also be `'running'` or `'interrupted'`
-  (`RunStatus`). A controller's `durability` is bound to a single run, so one
-  `RunController` instance drives at most one run at a time.
+  (`RunStatus`). A `RunController` instance is bound to one `deps.durability`
+  and drives at most one run at a time: `start({ runId })` accepts an
+  arbitrary `runId`, and nothing cross-checks it against the run the
+  `durability` instance was constructed for, so passing a mismatched `runId`
+  writes the lifecycle record under one id and the events under another,
+  silently. Do not treat a single `RunController` as a multi-run manager.
 
 - **Transport-agnostic tool-bridge** — `createToolBridgeCore` +
   `handleBridgeJsonRpc` are the portable core; `startHostToolBridge` is the
@@ -392,9 +401,17 @@ Cloudflare runtime (`@tanstack/ai-sandbox-cloudflare`):
   re-exports. Two models via `mode`: `do-drives` (the DO runs `chat()`) and
   `colocated` (harness + bridge run in-container; the DO is a thin coordinator,
   pair with `runInContainerHarness` from `/runner`).
-- `DurableObjectRunEventLog` mirrors `InMemoryRunEventLog` (both live in this
-  package) over DO storage; `timingSafeBearerEqualWeb` is the Web-Crypto
-  constant-time bearer check.
+- `DurableObjectRunEventLog` mirrors `InMemoryRunEventLog` (both live in
+  `@tanstack/ai-sandbox-cloudflare`, exported from its `/agent` entry) over DO
+  storage; `timingSafeBearerEqualWeb` is the Web-Crypto constant-time bearer
+  check. That package's own `RunStatus`, `TerminalRunStatus`, `RunRecord`, and
+  `RunError` describe its event-log vocabulary, which is deliberately distinct
+  from core's run-lifecycle types of the same names; the `/agent` entry
+  re-exports them under a `Legacy` prefix (`LegacyRunStatus`,
+  `LegacyTerminalRunStatus`, `LegacyRunRecord`, `LegacyRunError`) so an app can
+  import both this package's run driver and the Cloudflare event log without a
+  name collision. `RunEventLog`, `RunEvent`, and `RunEventLogReadOptions` have
+  no equivalent in core and keep their plain names.
 
 ## Events
 

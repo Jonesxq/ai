@@ -61,6 +61,7 @@ model ChatRun {
   startedAt       BigInt  @map("started_at")
   finishedAt      BigInt? @map("finished_at")
   error           String?
+  errorCode       String? @map("error_code")
   usageJson       String? @map("usage_json")
   sandboxKey      String? @map("sandbox_key")
   detachedSince   BigInt? @map("detached_since")
@@ -102,6 +103,13 @@ that references them. Extra app-owned fields (a `userId`, audit columns) are
 fine as long as they are optional or defaulted, so the stores' creates still
 succeed. `namespace` is the `MetadataStore` first argument; the stock SQL in
 the guide calls the same column `scope`.
+
+`RunRecord.error` is a structured `RunError` (`{ message: string, code?: string }`),
+so it gets two columns rather than one JSON blob: `error` for the provider's
+prose and `errorCode` for the stable classification an operator filters and
+groups by. `error` and `errorCode` always move together in `update`, so a
+later code-less failure can never leave a stale `code` from an earlier one
+behind.
 
 On **Postgres or MySQL** you can switch the `*Json` fields to Prisma's `Json`
 type and drop the `JSON.stringify`/`parse` in the mappers below. Keep `String`
@@ -176,7 +184,14 @@ function mapRun(row: ChatRun): RunRecord {
     status: toRunStatus(row.status),
     startedAt: Number(row.startedAt),
     ...(row.finishedAt != null ? { finishedAt: Number(row.finishedAt) } : {}),
-    ...(row.error != null ? { error: row.error } : {}),
+    ...(row.error != null
+      ? {
+          error: {
+            message: row.error,
+            ...(row.errorCode != null ? { code: row.errorCode } : {}),
+          },
+        }
+      : {}),
     ...(row.usageJson != null
       ? { usage: parseJson<TokenUsage>(row.usageJson) }
       : {}),
@@ -253,7 +268,12 @@ function createRunStore(db: PrismaClient): RunStore {
       if (patch.finishedAt !== undefined) {
         data.finishedAt = BigInt(patch.finishedAt)
       }
-      if (patch.error !== undefined) data.error = patch.error
+      // Both columns move together, so a later code-less failure cannot
+      // leave a stale errorCode from an earlier one behind.
+      if (patch.error !== undefined) {
+        data.error = patch.error.message
+        data.errorCode = patch.error.code ?? null
+      }
       if (patch.usage !== undefined)
         data.usageJson = JSON.stringify(patch.usage)
       if (patch.sandboxKey !== undefined) data.sandboxKey = patch.sandboxKey
@@ -453,6 +473,12 @@ Point the client at a throwaway database with the migration applied (a scratch
 SQLite file is enough) and reset it between runs. All four state stores are
 provided, so pass no `skip` — and `skip` never accepts `'locks'`, which is not
 a state store.
+
+If your recipe leaves an optional `runs` method
+(`findActiveRun`/`listByThread`/`listReclaimable`) unimplemented, declare it
+with `skipMethods`, e.g. `{ skipMethods: ['runs.listByThread'] }`. An
+omitted method that is not declared fails the suite instead of silently
+passing.
 
 ## Only if you are publishing this as a package
 

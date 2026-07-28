@@ -104,9 +104,17 @@ On `runs`, `findActiveRun`, `listByThread`, and `listReclaimable` are optional
 methods. Implement only the ones the app needs; the middleware and the
 conformance testkit both feature-detect them and skip what is missing.
 
-Row mappers omit absent optionals (`...(row.error != null ? { error: row.error } : {})`)
-so records compare cleanly against the reference in-memory backend. JSON columns
-are `text` — `JSON.parse` on read, `JSON.stringify` on write. Timestamps are
+`RunRecord.error` is a structured `RunError` (`{ message: string, code?: string }`),
+so the table gets two columns rather than one JSON blob: `error` for the
+provider's prose and `error_code` for the stable classification an operator
+filters and groups by. Write both together in `update`, so a later code-less
+failure can never leave a stale `error_code` from an earlier one behind, and
+omit `code` from the mapped record when the column is `null`:
+`...(row.error != null ? { error: { message: row.error, ...(row.error_code != null ? { code: row.error_code } : {}) } } : {})`.
+Other row mappers omit absent optionals the same way
+(`...(row.sandbox_key != null ? { sandboxKey: row.sandbox_key } : {})`) so
+records compare cleanly against the reference in-memory backend. JSON columns
+are `text`: `JSON.parse` on read, `JSON.stringify` on write. Timestamps are
 `integer` epoch ms.
 
 ## 5. The migration
@@ -126,6 +134,7 @@ CREATE TABLE IF NOT EXISTS chat_runs (
   started_at integer NOT NULL,
   finished_at integer,
   error text,
+  error_code text,
   usage_json text,
   sandbox_key text,
   detached_since integer,
@@ -254,6 +263,12 @@ runPersistenceConformance('app-d1', () => chatPersistence(env.AI_STATE))
 Run it against a Miniflare D1 binding with the migration applied, reset between
 runs. All four state stores are provided, so pass no `skip` — and `skip` never
 accepts `'locks'`: the suite covers state only.
+
+If your recipe leaves an optional `runs` method
+(`findActiveRun`/`listByThread`/`listReclaimable`) unimplemented, declare it
+with `skipMethods`, e.g. `{ skipMethods: ['runs.listByThread'] }`. An
+omitted method that is not declared fails the suite instead of silently
+passing.
 
 The lock store needs its **own** tests, because nothing in the conformance suite
 touches it. Cover at minimum: two concurrent `withLock` calls on the same key

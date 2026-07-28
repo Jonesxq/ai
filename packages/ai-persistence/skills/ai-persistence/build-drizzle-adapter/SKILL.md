@@ -74,6 +74,7 @@ export const chatRuns = sqliteTable(
     startedAt: integer('started_at').notNull(),
     finishedAt: integer('finished_at'),
     error: text('error'),
+    errorCode: text('error_code'),
     usageJson: text('usage_json', { mode: 'json' }).$type<TokenUsage>(),
     sandboxKey: text('sandbox_key'),
     detachedSince: integer('detached_since'),
@@ -116,6 +117,13 @@ stores never read columns they do not know about, so add `userId`, tenant ids,
 or audit columns the same way (nullable or defaulted so inserts still succeed).
 The `namespace` column is the `MetadataStore` first argument; the stock SQL in
 the guide calls the same column `scope`.
+
+`RunRecord.error` is a structured `RunError` (`{ message: string, code?: string }`),
+so it gets two columns rather than one JSON blob: `error` for the provider's
+prose and `errorCode` for the stable classification an operator filters and
+groups by. `error` and `errorCode` always move together in `update`, so a
+later code-less failure can never leave a stale `code` from an earlier one
+behind.
 
 **Postgres** (`drizzle-orm/pg-core`): `jsonb()` for the JSON payloads,
 `bigint({ mode: 'number' })` for epoch-ms timestamps (including
@@ -165,7 +173,14 @@ function mapRun(row: typeof chatRuns.$inferSelect): RunRecord {
     status: row.status,
     startedAt: row.startedAt,
     ...(row.finishedAt != null ? { finishedAt: row.finishedAt } : {}),
-    ...(row.error != null ? { error: row.error } : {}),
+    ...(row.error != null
+      ? {
+          error: {
+            message: row.error,
+            ...(row.errorCode != null ? { code: row.errorCode } : {}),
+          },
+        }
+      : {}),
     ...(row.usageJson != null ? { usage: row.usageJson } : {}),
     ...(row.sandboxKey != null ? { sandboxKey: row.sandboxKey } : {}),
     ...(row.detachedSince != null ? { detachedSince: row.detachedSince } : {}),
@@ -250,7 +265,12 @@ function createRunStore(db: Db): RunStore {
       const set: Partial<typeof chatRuns.$inferInsert> = {}
       if (patch.status !== undefined) set.status = patch.status
       if (patch.finishedAt !== undefined) set.finishedAt = patch.finishedAt
-      if (patch.error !== undefined) set.error = patch.error
+      // Both columns move together, so a later code-less failure cannot
+      // leave a stale errorCode from an earlier one behind.
+      if (patch.error !== undefined) {
+        set.error = patch.error.message
+        set.errorCode = patch.error.code ?? null
+      }
       if (patch.usage !== undefined) set.usageJson = patch.usage
       if (patch.sandboxKey !== undefined) set.sandboxKey = patch.sandboxKey
       if (patch.detachedSince !== undefined)
@@ -496,6 +516,12 @@ Point it at a throwaway database (`:memory:` SQLite, a scratch schema, PGlite)
 that has the migration applied, and reset between runs. Every store is
 provided, so there is nothing to `skip` — and `skip` never accepts `'locks'`,
 which is not a state store.
+
+If your recipe leaves an optional `runs` method
+(`findActiveRun`/`listByThread`/`listReclaimable`) unimplemented, declare it
+with `skipMethods`, e.g. `{ skipMethods: ['runs.listByThread'] }`. An
+omitted method that is not declared fails the suite instead of silently
+passing.
 
 ## Only if you are publishing this as a package
 

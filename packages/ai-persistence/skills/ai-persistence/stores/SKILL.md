@@ -136,8 +136,32 @@ interface RunStore {
 `'interrupted'` is a human-in-the-loop pause, not terminal: it is what
 interrupt-resume continues from, and must never be conflated with `'aborted'`
 (an explicit cancellation). `TerminalRunStatus` narrows to
-`'completed' | 'failed' | 'aborted'`; `isTerminalRunStatus(status)` tests it.
-`RunRecord.error` is a plain string, not an error object.
+`'completed' | 'failed' | 'aborted'`. `isTerminalRunStatus(status)` is a type
+predicate: `(status: RunStatus) => status is TerminalRunStatus`, so calling it
+inside a guard narrows `status` to `TerminalRunStatus` for the rest of that
+branch, with no cast needed.
+
+`RunRecord.error` is a structured `RunError`, not a bare string:
+
+```ts
+interface RunError {
+  message: string
+  code?: string
+}
+```
+
+`message` is the provider's prose (it changes between model versions and
+cannot be branched on); `code` is the stable, machine-branchable
+classification a consumer switches over to retry, escalate, or show specific
+UI. Store both, and omit `code` from a mapped record when its column is
+`null` rather than writing `code: undefined` (`...(row.errorCode != null ? { code: row.errorCode } : {})`).
+
+`defineRunStore<const T extends RunStore>(store: T): T` returns the passed
+object's own type, so an optional method your store implements (say,
+`listByThread`) stays known-present on the returned value instead of widening
+back to `RunStore`'s `| undefined`. You get autocomplete and contract checking
+without a separate `: RunStore` annotation, and without a feature-detection
+guard on your own return value.
 
 - **`createOrResume`** (required): if `runId` exists, return it **unchanged**,
   ignoring the passed `threadId` / `startedAt` / `status`. Resuming a run does
@@ -286,6 +310,12 @@ runPersistenceConformance('my-backend', () => myPersistence())
 // runPersistenceConformance('msgs-only', () => p, {
 //   skip: ['runs', 'interrupts', 'metadata'],
 // })
+
+// Declare an intentionally-unimplemented OPTIONAL RunStore method with
+// skipMethods, so vitest reports it as a real SKIPPED case:
+// runPersistenceConformance('my-backend', () => myPersistence(), {
+//   skipMethods: ['runs.listByThread', 'runs.listReclaimable'],
+// })
 ```
 
 The testkit is the compatibility gate: round-trips, rich message shapes,
@@ -295,6 +325,18 @@ in `skip` fails loudly.
 
 `skip` accepts only `'messages' | 'runs' | 'interrupts' | 'metadata'`. **Do not
 pass `'locks'`** — it is not a state store and the suite does not cover it.
+
+**`skipMethods` (declare-or-fail for optional `RunStore` methods).** A backend
+that omits an OPTIONAL `RunStore` method (`findActiveRun`, `listByThread`,
+`listReclaimable`) must declare it in `skipMethods` as `'runs.<method>'`, e.g.
+`skipMethods: ['runs.listByThread', 'runs.listReclaimable']`. An omitted
+method that is NOT declared throws with an actionable message instead of
+silently reporting a pass; a declared one is reported as a SKIPPED vitest
+case, never as a pass. A case that did not run must never be
+indistinguishable from one that did. See
+`examples/ts-react-chat/src/lib/sqlite-persistence.test.ts` for a worked
+example that skips `listByThread` and `listReclaimable` while keeping
+`findActiveRun` under test.
 
 Reference implementation: `memoryPersistence()` in `@tanstack/ai-persistence`.
 
