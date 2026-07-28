@@ -91,10 +91,10 @@ describe('chat persistence error/abort hooks', () => {
 
     const run = await persistence.stores.runs!.get('r1')
     expect(run?.status).toBe('failed')
-    expect(run?.error).toBe('provider exploded')
+    expect(run?.error).toEqual({ message: 'provider exploded' })
   })
 
-  it('coerces a non-Error thrown value into the run error string', async () => {
+  it('coerces a non-Error thrown value into the run error message', async () => {
     const persistence = memoryPersistence()
 
     await expect(
@@ -111,7 +111,7 @@ describe('chat persistence error/abort hooks', () => {
 
     const run = await persistence.stores.runs!.get('r1')
     expect(run?.status).toBe('failed')
-    expect(run?.error).toBe('string failure')
+    expect(run?.error).toEqual({ message: 'string failure' })
   })
 
   it('propagates and does not swallow a store error thrown while recording an interrupt', async () => {
@@ -282,10 +282,10 @@ describe('generation persistence error/abort hooks', () => {
 
     const run = await persistence.stores.runs!.get(requestId)
     expect(run?.status).toBe('failed')
-    expect(run?.error).toBe('image boom')
+    expect(run?.error).toEqual({ message: 'image boom' })
   })
 
-  it('coerces a non-Error generation failure into the run error string', async () => {
+  it('coerces a non-Error generation failure into the run error message', async () => {
     const persistence = memoryPersistence()
     let requestId = ''
 
@@ -306,7 +306,7 @@ describe('generation persistence error/abort hooks', () => {
 
     const run = await persistence.stores.runs!.get(requestId)
     expect(run?.status).toBe('failed')
-    expect(run?.error).toBe('image string failure')
+    expect(run?.error).toEqual({ message: 'image string failure' })
   })
 
   it('marks the run interrupted on generation abort', async () => {
@@ -332,7 +332,7 @@ describe('generation persistence error/abort hooks', () => {
     )
   })
 
-  it('coerces a non-Error into the run error string via the onError handler', async () => {
+  it('coerces a non-Error into the run error message via the onError handler', async () => {
     const persistence = memoryPersistence()
     const middleware = withGenerationPersistence(persistence)
     await persistence.stores.runs!.createOrResume({
@@ -348,6 +348,6 @@ describe('generation persistence error/abort hooks', () => {
 
     const run = await persistence.stores.runs!.get('req-err')
     expect(run?.status).toBe('failed')
-    expect(run?.error).toBe('[object Object]')
+    expect(run?.error).toEqual({ message: '[object Object]' })
   })
 })

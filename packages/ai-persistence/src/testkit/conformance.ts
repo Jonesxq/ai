@@ -10,15 +10,32 @@
  * Locks are not part of this suite — they are a separate coordination concern
  * (`LockStore` + `withLocks`), not state stores.
  *
- * SKIPPING: a backend that deliberately omits a state store must declare it in
- * `options.skip`. A store that is absent AND not listed in `skip` fails the
- * suite loudly — silent gaps are not allowed.
+ * SKIPPING (declare or fail): a backend that deliberately omits a state store
+ * must declare it in `options.skip`, and one that omits an OPTIONAL store
+ * method must declare it in `options.skipMethods`. Anything absent and not
+ * declared fails the suite loudly, and anything declared absent is reported by
+ * vitest as a SKIPPED case, never as a pass. Silent gaps are not allowed: a
+ * case that did not run must never be indistinguishable from one that did.
+ *
+ * RESERVED RUN-ID PREFIX: `rc-` belongs to the `listReclaimable` case, which
+ * filters the method's (not thread-scoped) result down to `rc-` ids before an
+ * exact-set assertion. A new case in `describe('runs')` must NOT seed a run id
+ * starting with `rc-`, or it silently changes that expected set.
  */
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { ModelMessage } from '@tanstack/ai'
-import type { AIPersistence, AIPersistenceStores } from '../types'
+import type { AIPersistence, AIPersistenceStores, RunStore } from '../types'
 
 type MakePersistence = () => Promise<AIPersistence> | AIPersistence
+
+/** Methods that are optional on the `RunStore` contract. */
+type OptionalRunStoreMethod =
+  | 'findActiveRun'
+  | 'listByThread'
+  | 'listReclaimable'
+
+/** Dotted `store.method` key a backend passes to declare an omitted method. */
+export type PersistenceConformanceMethodKey = `runs.${OptionalRunStoreMethod}`
 
 export interface PersistenceConformanceOptions {
   /**
@@ -27,6 +44,12 @@ export interface PersistenceConformanceOptions {
    * dropped/misconfigured store can never pass silently.
    */
   skip?: Array<keyof AIPersistenceStores>
+  /**
+   * OPTIONAL store methods this backend intentionally does not implement, as
+   * `'runs.listByThread'` and friends. A method that is absent and NOT listed
+   * here fails the suite; a listed one is reported as a skipped case.
+   */
+  skipMethods?: Array<PersistenceConformanceMethodKey>
 }
 
 /**
@@ -39,6 +62,9 @@ export function runPersistenceConformance(
   options?: PersistenceConformanceOptions,
 ): void {
   const skip = new Set<keyof AIPersistenceStores>(options?.skip ?? [])
+  const skipMethods = new Set<PersistenceConformanceMethodKey>(
+    options?.skipMethods ?? [],
+  )
 
   describe(`AIPersistence conformance: ${name}`, () => {
     let persistence: AIPersistence
@@ -64,10 +90,32 @@ export function runPersistenceConformance(
       )
     }
 
+    /**
+     * Narrow `runs` to a store that definitely implements the optional method
+     * `methodName`, so the case can call it without a non-null assertion.
+     *
+     * Returns `false` only when the omission was declared in
+     * `options.skipMethods` (the caller then reports a skip). An undeclared
+     * omission throws, mirroring `resolveStore`: a case that cannot run must
+     * never be reported as a pass.
+     */
+    function hasRunsMethod<TName extends OptionalRunStoreMethod>(
+      runs: RunStore,
+      methodName: TName,
+    ): runs is RunStore & Required<Pick<RunStore, TName>> {
+      if (runs[methodName]) return true
+      const key: PersistenceConformanceMethodKey = `runs.${methodName}`
+      if (skipMethods.has(key)) return false
+      throw new Error(
+        `AIPersistence conformance: optional method '${key}' is not implemented. ` +
+          `Implement it, or pass { skipMethods: ['${key}'] } if the omission is intentional.`,
+      )
+    }
+
     describe('messages', () => {
-      it('round-trips a thread and returns [] for unknown threads', async () => {
+      it('round-trips a thread and returns [] for unknown threads', async (ctx) => {
         const store = resolveStore('messages')
-        if (!store) return
+        if (!store) return ctx.skip('store not provided')
 
         expect(await store.loadThread('thread-unknown')).toEqual([])
 
@@ -89,9 +137,9 @@ export function runPersistenceConformance(
         ])
       })
 
-      it('round-trips rich message shapes with deep equality', async () => {
+      it('round-trips rich message shapes with deep equality', async (ctx) => {
         const store = resolveStore('messages')
-        if (!store) return
+        if (!store) return ctx.skip('store not provided')
 
         const rich: Array<ModelMessage> = [
           { role: 'user', content: 'plain string' },
@@ -150,9 +198,9 @@ export function runPersistenceConformance(
     })
 
     describe('runs', () => {
-      it('creates, resumes idempotently, updates, and gets', async () => {
+      it('creates, resumes idempotently, updates, and gets', async (ctx) => {
         const store = resolveStore('runs')
-        if (!store) return
+        if (!store) return ctx.skip('store not provided')
 
         expect(await store.get('run-missing')).toBeNull()
 
@@ -193,23 +241,74 @@ export function runPersistenceConformance(
           usage: { promptTokens: 3, completionTokens: 4, totalTokens: 7 },
         })
 
-        await store.update('run-1', { status: 'failed', error: 'boom' })
+        // `error` is a structured RunError: the prose `message` plus the
+        // optional machine-branchable `code`. Both must survive the round-trip,
+        // so a backend that flattens the record to a bare string fails here.
+        await store.update('run-1', {
+          status: 'failed',
+          error: { message: 'boom', code: 'provider_overloaded' },
+        })
         const failed = await store.get('run-1')
         expect(failed?.status).toBe('failed')
-        expect(failed?.error).toBe('boom')
+        expect(failed?.error).toEqual({
+          message: 'boom',
+          code: 'provider_overloaded',
+        })
 
         // Updating a missing run is a no-op (does not throw, does not create).
         await store.update('run-absent', { status: 'completed' })
         expect(await store.get('run-absent')).toBeNull()
       })
 
-      // `findActiveRun` is optional on the RunStore contract; backends that have
-      // not implemented it are skipped, but any backend that has must satisfy
-      // these invariants (most-recent-running wins, thread-scoped, null when idle).
-      it('findActiveRun returns the most recent running run for a thread', async () => {
+      // The idempotency invariant has teeth precisely where it is dangerous:
+      // resuming a run that already FINISHED must not resurrect it. An adapter
+      // written as `INSERT ... ON CONFLICT DO UPDATE SET status='running'`
+      // looks correct on a still-running record and silently revives dead ones,
+      // after which `findActiveRun` hands clients a run that will never emit
+      // again. Assert the terminal status and `finishedAt` both survive.
+      it('createOrResume never resurrects a finished run', async (ctx) => {
         const store = resolveStore('runs')
-        if (!store) return
-        if (!store.findActiveRun) return
+        if (!store) return ctx.skip('store not provided')
+
+        await store.createOrResume({
+          runId: 'nc-1',
+          threadId: 'nc-t',
+          startedAt: 10,
+        })
+        await store.update('nc-1', { status: 'completed', finishedAt: 20 })
+
+        // Resume with a DIFFERENT status/startedAt: both must be ignored.
+        const resumed = await store.createOrResume({
+          runId: 'nc-1',
+          threadId: 'nc-t',
+          startedAt: 999,
+          status: 'running',
+        })
+        expect(resumed).toMatchObject({
+          runId: 'nc-1',
+          status: 'completed',
+          startedAt: 10,
+          finishedAt: 20,
+        })
+
+        // And the stored record itself was not rewritten either.
+        expect(await store.get('nc-1')).toMatchObject({
+          status: 'completed',
+          startedAt: 10,
+          finishedAt: 20,
+        })
+      })
+
+      // `findActiveRun` is optional on the RunStore contract; a backend that
+      // declares the omission in `skipMethods` is reported as skipped, and one
+      // that omits it silently fails. Any backend that has it must satisfy these
+      // invariants (most-recent-running wins, thread-scoped, null when idle).
+      it('findActiveRun returns the most recent running run for a thread', async (ctx) => {
+        const store = resolveStore('runs')
+        if (!store) return ctx.skip('store not provided')
+        if (!hasRunsMethod(store, 'findActiveRun')) {
+          return ctx.skip('runs.findActiveRun not implemented')
+        }
 
         const thread = 'thread-active'
         expect(await store.findActiveRun(thread)).toBeNull()
@@ -258,13 +357,15 @@ export function runPersistenceConformance(
         expect(await store.findActiveRun(thread)).toBeNull()
       })
 
-      // `listByThread` is optional on the RunStore contract; backends that have
-      // not implemented it are skipped, but any backend that has must return
-      // that thread's runs ordered ascending by `startedAt`.
-      it('lists runs by thread when supported', async () => {
+      // `listByThread` is optional on the RunStore contract; a declared omission
+      // is reported as skipped and an undeclared one fails. Any backend that has
+      // it must return that thread's runs ordered ascending by `startedAt`.
+      it('lists runs by thread when supported', async (ctx) => {
         const runs = resolveStore('runs')
-        if (!runs) return
-        if (!runs.listByThread) return
+        if (!runs) return ctx.skip('store not provided')
+        if (!hasRunsMethod(runs, 'listByThread')) {
+          return ctx.skip('runs.listByThread not implemented')
+        }
 
         await runs.createOrResume({
           runId: 'lt-b',
@@ -280,8 +381,9 @@ export function runPersistenceConformance(
         expect(listed.map((r) => r.runId)).toEqual(['lt-a', 'lt-b'])
       })
 
-      // `listReclaimable` is optional on the RunStore contract; backends that
-      // have not implemented it are skipped, but any backend that has must
+      // `listReclaimable` is optional on the RunStore contract; a declared
+      // omission is reported as skipped and an undeclared one fails. Any
+      // backend that has it must
       // surface only runs where ALL THREE hold: status === 'running',
       // detachedSince is set, and detachedSince <= now - ttlMs (inclusive
       // cutoff). Each negative fixture below pins one of those conditions so
@@ -289,10 +391,12 @@ export function runPersistenceConformance(
       // "ignore status", or "ignore detachedSince") fails this case. Do not
       // simplify these away to a bare `toContain` — that is exactly the
       // weakness this case was strengthened to catch.
-      it('lists reclaimable detached runs when supported', async () => {
+      it('lists reclaimable detached runs when supported', async (ctx) => {
         const runs = resolveStore('runs')
-        if (!runs) return
-        if (!runs.listReclaimable) return
+        if (!runs) return ctx.skip('store not provided')
+        if (!hasRunsMethod(runs, 'listReclaimable')) {
+          return ctx.skip('runs.listReclaimable not implemented')
+        }
 
         const now = 10_000
         const ttlMs = 5_000
@@ -370,9 +474,9 @@ export function runPersistenceConformance(
     })
 
     describe('interrupts', () => {
-      it('creates, resolves, cancels, and lists by thread and run', async () => {
+      it('creates, resolves, cancels, and lists by thread and run', async (ctx) => {
         const store = resolveStore('interrupts')
-        if (!store) return
+        if (!store) return ctx.skip('store not provided')
 
         expect(await store.get('int-missing')).toBeNull()
 
@@ -437,9 +541,9 @@ export function runPersistenceConformance(
         ).toEqual([])
       })
 
-      it('create is insert-if-absent: a duplicate id never clobbers a resolved interrupt', async () => {
+      it('create is insert-if-absent: a duplicate id never clobbers a resolved interrupt', async (ctx) => {
         const store = resolveStore('interrupts')
-        if (!store) return
+        if (!store) return ctx.skip('store not provided')
 
         await store.create({
           interruptId: 'int-dup',
@@ -467,9 +571,9 @@ export function runPersistenceConformance(
         expect(after?.requestedAt).toBe(100)
       })
 
-      it('lists ordered by requestedAt ascending even when inserts are out of order', async () => {
+      it('lists ordered by requestedAt ascending even when inserts are out of order', async (ctx) => {
         const store = resolveStore('interrupts')
-        if (!store) return
+        if (!store) return ctx.skip('store not provided')
 
         // Insert later-timestamped first so Map insertion order would reverse
         // requestedAt order without an explicit sort.
@@ -508,9 +612,9 @@ export function runPersistenceConformance(
     })
 
     describe('metadata', () => {
-      it('sets, gets, namespaces, and deletes without composite-key collisions', async () => {
+      it('sets, gets, namespaces, and deletes without composite-key collisions', async (ctx) => {
         const store = resolveStore('metadata')
-        if (!store) return
+        if (!store) return ctx.skip('store not provided')
 
         expect(await store.get('scope-a', 'k')).toBeNull()
 

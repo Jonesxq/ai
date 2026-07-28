@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS runs (
   started_at integer NOT NULL,
   finished_at integer,
   error text,
+  error_code text,
   usage_json text
 );
 CREATE TABLE IF NOT EXISTS interrupts (
@@ -88,6 +89,7 @@ interface RunRow {
   started_at: number
   finished_at: number | null
   error: string | null
+  error_code: string | null
   usage_json: string | null
 }
 interface InterruptRow {
@@ -142,6 +144,13 @@ function createMessageStore(db: DatabaseSync) {
 // — including `'aborted'` — without a schema change. The reclaim fields
 // (`sandboxKey`, `detachedSince`, `cancelRequested`) are optional on `RunRecord`
 // and have no columns here: Phase 1 does not persist them.
+//
+// `RunRecord.error` is the structured `RunError` (`{ message, code? }`) and gets
+// two columns rather than one JSON blob: `error` for the provider's prose and
+// `error_code` for the stable classification. `code` is precisely the field an
+// operator filters and groups by (`WHERE error_code = 'rate_limited'`), which a
+// JSON blob would bury, and this file's convention reserves the `_json` suffix
+// for columns that really do hold serialized JSON.
 function mapRun(row: RunRow): RunRecord {
   return {
     runId: row.run_id,
@@ -149,7 +158,14 @@ function mapRun(row: RunRow): RunRecord {
     status: row.status as RunStatus,
     startedAt: row.started_at,
     ...(row.finished_at != null ? { finishedAt: row.finished_at } : {}),
-    ...(row.error != null ? { error: row.error } : {}),
+    ...(row.error != null
+      ? {
+          error: {
+            message: row.error,
+            ...(row.error_code != null ? { code: row.error_code } : {}),
+          },
+        }
+      : {}),
     ...(row.usage_json != null
       ? { usage: parseJson<TokenUsage>(row.usage_json) }
       : {}),
@@ -196,7 +212,7 @@ function createRunStore(db: DatabaseSync) {
       // they are deliberately ignored here. Never splice a patch key into SQL
       // directly — the column name always comes from this fixed literal set.
       const sets: Array<string> = []
-      const params: Array<string | number> = []
+      const params: Array<string | number | null> = []
       if (patch.status !== undefined) {
         sets.push('status = ?')
         params.push(patch.status)
@@ -206,8 +222,10 @@ function createRunStore(db: DatabaseSync) {
         params.push(patch.finishedAt)
       }
       if (patch.error !== undefined) {
-        sets.push('error = ?')
-        params.push(patch.error)
+        // Both halves of the structured error move together, so a later failure
+        // with no `code` cannot leave a stale code from an earlier one behind.
+        sets.push('error = ?', 'error_code = ?')
+        params.push(patch.error.message, patch.error.code ?? null)
       }
       if (patch.usage !== undefined) {
         sets.push('usage_json = ?')

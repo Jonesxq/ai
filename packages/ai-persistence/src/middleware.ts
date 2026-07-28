@@ -349,10 +349,14 @@ async function failRun(
   runId: string,
   error: unknown,
 ): Promise<void> {
+  // `RunRecord.error` is a structured `RunError`. Only `message` is filled in
+  // here: the middleware sees an opaque thrown value, and inventing a `code`
+  // from it would fabricate the stable classification consumers branch on. A
+  // provider-supplied code reaches the record through the adapter layer.
   await runs?.update(runId, {
     status: 'failed',
     finishedAt: Date.now(),
-    error: error instanceof Error ? error.message : String(error),
+    error: { message: error instanceof Error ? error.message : String(error) },
   })
 }
 
