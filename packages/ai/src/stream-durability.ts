@@ -13,18 +13,8 @@ export interface StreamDurability<TOffset extends string = string> {
   /**
    * Persist a batch before it is delivered and return exactly one resumable
    * offset for each chunk, in the same order.
-   *
-   * `opts.offsets` lets a caller supply deterministic offsets instead of having
-   * the adapter assign them, which makes append an **upsert**: re-appending an
-   * already-stored offset must replace it, not duplicate it. A run driver
-   * resuming after a crash re-derives the same offsets from its source position,
-   * so replaying an overlapping range is a no-op. When supplied, the array MUST
-   * be the same length as `chunks`.
    */
-  append: (
-    chunks: Array<StreamChunk>,
-    opts?: { offsets?: Array<TOffset> },
-  ) => Promise<Array<TOffset>>
+  append: (chunks: Array<StreamChunk>) => Promise<Array<TOffset>>
   /** Replay chunks strictly after the supplied adapter-owned offset. */
   read: (
     offset: TOffset,
@@ -35,6 +25,39 @@ export interface StreamDurability<TOffset extends string = string> {
    * for every producer exit, including completion, cancellation, and failure.
    */
   close: () => Promise<void>
+}
+
+/**
+ * A {@link StreamDurability} that can re-persist an already-stored range
+ * idempotently.
+ *
+ * A run driver resuming after a crash re-derives the same offsets from its
+ * source position, so replaying an overlapping range must be a no-op rather
+ * than producing duplicates. That capability is deliberately a **separate,
+ * optional method** instead of an optional parameter on `append`:
+ *
+ * - Only adapters that actually support it return this type, so a consumer
+ *   requiring the capability asks for `UpsertableStreamDurability` and a
+ *   mismatch is a compile error rather than a runtime failure buried in a
+ *   run log.
+ * - Pairing each chunk with its offset structurally makes a length mismatch,
+ *   a sparse hole, and an unpaired chunk unrepresentable.
+ *
+ * Implementations MUST validate the entire batch before mutating any stored
+ * state (so a rejected call never partially applies), MUST reject an offset
+ * they did not mint themselves — every accepted offset is resumable by
+ * definition — and MUST reject an offset repeated within one batch.
+ */
+export interface UpsertableStreamDurability<
+  TOffset extends string = string,
+> extends StreamDurability<TOffset> {
+  /**
+   * Persist a batch at caller-supplied offsets, replacing any entry already
+   * stored at the same offset. Returns the offsets in the order supplied.
+   */
+  upsert: (
+    entries: Array<{ chunk: StreamChunk; offset: TOffset }>,
+  ) => Promise<Array<TOffset>>
 }
 
 const MEMORY_OFFSET_PREFIX = 'memory:v1:'
@@ -132,6 +155,15 @@ interface MemoryEntry {
   offset: string
   chunk: StreamChunk
 }
+
+/**
+ * One validated action from an `upsert` batch. Building the whole plan before
+ * applying any of it is what keeps a rejected `upsert` from partially mutating
+ * the log.
+ */
+type UpsertStep =
+  | { kind: 'replace'; existing: MemoryEntry; chunk: StreamChunk }
+  | { kind: 'push'; seq: number; offset: string; chunk: StreamChunk }
 
 interface MemoryLog {
   entries: Array<MemoryEntry>
@@ -235,7 +267,7 @@ function wakeWaiters(log: MemoryLog): void {
 export function memoryStream(
   request: Request,
   options: MemoryStreamOptions = {},
-): StreamDurability {
+): UpsertableStreamDurability {
   const resumeOffset = readResumeOffset(request)
   const runId = resolveMemoryRunId(request, resumeOffset)
   const firstChunkDeadlineMs =
@@ -243,36 +275,13 @@ export function memoryStream(
 
   return {
     resumeFrom: () => resumeOffset,
-    // `async` so a length-mismatch surfaces as a rejected promise rather than a
+    // `async` so every failure surfaces as a rejected promise rather than a
     // synchronous throw at the call site — `append` is declared to return a
     // Promise, so callers must be able to `.catch()` every failure mode.
-    append: async (chunks, opts) => {
-      const supplied = opts?.offsets
-      if (supplied !== undefined && supplied.length !== chunks.length) {
-        throw new Error(
-          `memoryStream: offsets length ${supplied.length} does not match chunks length ${chunks.length}`,
-        )
-      }
+    append: async (chunks) => {
       const log = getOrCreateLog(runId)
       const firstSeq = (log.entries.at(-1)?.seq ?? 0) + 1
       const offsets = chunks.map((chunk, index) => {
-        if (supplied !== undefined) {
-          const offset = supplied[index]
-          if (offset === undefined) {
-            throw new Error(
-              `memoryStream: offsets[${index}] is missing (offsets must be dense and the same length as chunks)`,
-            )
-          }
-          // Upsert: a re-appended offset replaces its entry rather than adding
-          // a second one, so a resumed driver can safely re-send an overlap.
-          const existing = log.entries.find((entry) => entry.offset === offset)
-          if (existing) {
-            existing.chunk = chunk
-          } else {
-            log.entries.push({ seq: firstSeq + index, offset, chunk })
-          }
-          return offset
-        }
         const seq = firstSeq + index
         const offset = encodeMemoryOffset(runId, seq)
         log.entries.push({ seq, offset, chunk })
@@ -280,6 +289,73 @@ export function memoryStream(
       })
       wakeWaiters(log)
       return offsets
+    },
+    // `async` for the same reason as `append`: every validation failure below
+    // must be observable via `.catch()`, never as a synchronous throw.
+    upsert: async (entries) => {
+      const log = getOrCreateLog(runId)
+      const tailSeq = log.entries.at(-1)?.seq ?? 0
+
+      // Validate the WHOLE batch before touching `log.entries`, so a rejected
+      // upsert never partially applies and a caller that catches and retries
+      // can be sure no prefix landed.
+      const seen = new Set<string>()
+      // Tail as it will stand once every push planned so far has been applied,
+      // so intra-batch ordering is validated up front too.
+      let plannedTailSeq = tailSeq
+      const plan = entries.map(({ chunk, offset }, index): UpsertStep => {
+        let decoded: MemoryOffset
+        try {
+          decoded = decodeMemoryOffset(offset)
+        } catch (cause) {
+          throw new Error(
+            `memoryStream: entries[${index}].offset ${JSON.stringify(offset)} is not a resumable memory stream offset: ${cause instanceof Error ? cause.message : String(cause)}`,
+          )
+        }
+        if (decoded.runId !== runId) {
+          throw new Error(
+            `memoryStream: entries[${index}].offset ${JSON.stringify(offset)} belongs to run ${JSON.stringify(decoded.runId)}, not ${JSON.stringify(runId)}`,
+          )
+        }
+        const seq = decoded.seq
+        if (seen.has(offset)) {
+          throw new Error(
+            `memoryStream: entries[${index}].offset ${JSON.stringify(offset)} is repeated within the batch; each offset may appear at most once`,
+          )
+        }
+        seen.add(offset)
+        const existing = log.entries.find((entry) => entry.offset === offset)
+        if (existing) return { kind: 'replace', existing, chunk }
+        // A not-yet-stored offset must sit strictly after the current tail.
+        // `read()` walks `entries` in array order and filters `seq > threshold`,
+        // so a pushed entry has to keep the seqs monotonically increasing;
+        // reusing the offset's own decoded seq also keeps a returned offset's
+        // threshold exactly consistent with the entry it names. Gaps are fine —
+        // nothing depends on seqs being contiguous, only on them increasing —
+        // so do NOT "fix" this to renumber densely.
+        if (seq <= plannedTailSeq) {
+          throw new Error(
+            `memoryStream: entries[${index}].offset ${JSON.stringify(offset)} is not stored yet but claims position ${seq}, at or before the tail ${plannedTailSeq}; a new offset must come after every stored and preceding entry`,
+          )
+        }
+        plannedTailSeq = seq
+        return { kind: 'push', seq, offset, chunk }
+      })
+
+      // Validation passed for every entry — mutation below cannot fail.
+      for (const step of plan) {
+        if (step.kind === 'replace') {
+          step.existing.chunk = step.chunk
+        } else {
+          log.entries.push({
+            seq: step.seq,
+            offset: step.offset,
+            chunk: step.chunk,
+          })
+        }
+      }
+      wakeWaiters(log)
+      return entries.map((entry) => entry.offset)
     },
     close: () => {
       const log = getOrCreateLog(runId)
