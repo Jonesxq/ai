@@ -259,7 +259,7 @@
         {
           "label": "Generation Persistence",
           "to": "persistence/generation-persistence",
-          "addedAt": "2026-07-23"
+          "addedAt": "2026-07-28"
         },
         {
           "label": "Controls",

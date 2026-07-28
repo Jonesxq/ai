@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { useGeneration } from '../src/use-generation'
@@ -403,15 +404,91 @@ describe('useGeneration', () => {
       })
 
       expect(connect).not.toHaveBeenCalled()
-      // Persisted state is read-only for display; the client never reads it
-      // back to drive a resume, so getItem is not consulted on mount.
+      // The explicit initialResumeSnapshot seed takes precedence over storage,
+      // so automatic hydration (getItem) is skipped entirely.
       expect(persistence.getItem).not.toHaveBeenCalled()
       expect(result.current.isLoading).toBe(false)
       expect(result.current.status).toBe('idle')
-      // The persisted snapshot is still exposed as read-only state.
+      // The persisted snapshot is still exposed as display state.
       expect(result.current.resumeState).toEqual({
         threadId: 'thread-resume',
         runId: 'run-resume',
+      })
+    })
+  })
+
+  describe('persistence', () => {
+    it('hydrates the resume snapshot from storage on mount without starting a run', async () => {
+      const { adapter, connect } = createRunContextCaptureAdapter(
+        createGenerationChunks({ id: '1' }),
+      )
+      const persistence: GenerationPersistence = {
+        getItem: vi.fn(() => ({
+          resumeState: null,
+          status: 'complete' as const,
+          result: { id: 'result-1', model: 'image-model' },
+        })),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      }
+
+      const { result } = renderHook(() =>
+        useGeneration({
+          id: 'hydrated',
+          connection: adapter,
+          persistence: persistence,
+        }),
+      )
+
+      await waitFor(() => {
+        expect(result.current.resumeSnapshot).toMatchObject({
+          status: 'complete',
+          result: { id: 'result-1' },
+        })
+      })
+      expect(persistence.getItem).toHaveBeenCalledWith('generation:hydrated')
+      expect(connect).not.toHaveBeenCalled()
+      expect(result.current.status).toBe('idle')
+    })
+
+    it('generates normally under React StrictMode (dispose → remount replay)', async () => {
+      const { adapter, connect } = createRunContextCaptureAdapter(
+        createGenerationChunks({ id: 'strict-1' }),
+      )
+
+      const { result } = renderHook(
+        () => useGeneration({ connection: adapter }),
+        { wrapper: StrictMode },
+      )
+
+      await act(async () => {
+        await result.current.generate({ prompt: 'test' })
+      })
+
+      expect(connect).toHaveBeenCalledTimes(1)
+      await waitFor(() => {
+        expect(result.current.status).toBe('success')
+        expect(result.current.result).toEqual({ id: 'strict-1' })
+      })
+    })
+
+    it('exposes sanitized artifact refs observed from a streamed result', async () => {
+      const adapter = createMockConnectionAdapter({
+        chunks: createReplayVideoChunks(),
+      })
+
+      const { result } = renderHook(() =>
+        useGeneration({ connection: adapter }),
+      )
+
+      await act(async () => {
+        await result.current.generate({ prompt: 'replay' })
+      })
+
+      await waitFor(() => {
+        expect(result.current.resultArtifacts).toEqual([replayedVideoArtifact])
+        expect(result.current.pendingArtifacts).toEqual([replayedVideoArtifact])
+        expect(result.current.resumeSnapshot?.status).toBe('complete')
       })
     })
   })
