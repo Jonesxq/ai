@@ -257,6 +257,49 @@ export function runPersistenceConformance(
         })
         expect(await store.findActiveRun(thread)).toBeNull()
       })
+
+      // `listByThread` is optional on the RunStore contract; backends that have
+      // not implemented it are skipped, but any backend that has must return
+      // that thread's runs ordered ascending by `startedAt`.
+      it('lists runs by thread when supported', async () => {
+        const runs = resolveStore('runs')
+        if (!runs) return
+        if (!runs.listByThread) return
+
+        await runs.createOrResume({
+          runId: 'lt-b',
+          threadId: 'lt',
+          startedAt: 2,
+        })
+        await runs.createOrResume({
+          runId: 'lt-a',
+          threadId: 'lt',
+          startedAt: 1,
+        })
+        const listed = await runs.listByThread('lt')
+        expect(listed.map((r) => r.runId)).toEqual(['lt-a', 'lt-b'])
+      })
+
+      // `listReclaimable` is optional on the RunStore contract; backends that
+      // have not implemented it are skipped, but any backend that has must
+      // surface running runs detached past the given ttl.
+      it('lists reclaimable detached runs when supported', async () => {
+        const runs = resolveStore('runs')
+        if (!runs) return
+        if (!runs.listReclaimable) return
+
+        await runs.createOrResume({
+          runId: 'rc',
+          threadId: 'rc-t',
+          startedAt: 1,
+        })
+        await runs.update('rc', { detachedSince: 1_000 })
+        const reclaimable = await runs.listReclaimable({
+          now: 10_000,
+          ttlMs: 5_000,
+        })
+        expect(reclaimable.map((r) => r.runId)).toContain('rc')
+      })
     })
 
     describe('interrupts', () => {
