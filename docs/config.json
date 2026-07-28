@@ -263,6 +263,11 @@
           "updatedAt": "2026-07-28"
         },
         {
+          "label": "Generation Persistence: Advanced",
+          "to": "persistence/generation-persistence-advanced",
+          "addedAt": "2026-07-28"
+        },
+        {
           "label": "Keep Generated Files",
           "to": "persistence/keep-generated-files",
           "addedAt": "2026-07-28",
