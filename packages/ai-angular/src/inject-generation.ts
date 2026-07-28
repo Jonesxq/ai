@@ -18,13 +18,12 @@ import type {
   GenerationClientOptions,
   GenerationClientState,
   GenerationFetcher,
-  GenerationPendingArtifact,
   GenerationPersistence,
+  GenerationRestoredResult,
   GenerationResumeSnapshot,
   GenerationResumeState,
   InferGenerationOutputFromReturn,
 } from '@tanstack/ai-client'
-import type { PersistedArtifactRef } from '@tanstack/ai/client'
 import type { ReactiveOption } from './internal/to-reactive'
 
 let nextId = 0
@@ -69,6 +68,13 @@ export interface InjectGenerationOptions<TInput, TResult, TOutput = TResult> {
   onProgress?: (progress: number, message?: string) => void
   /** Callback for each stream chunk (connect-based adapter mode only) */
   onChunk?: (chunk: StreamChunk) => void
+  /**
+   * @internal Rebuild a typed result from a restored snapshot, injected by each
+   * specialized injectable (image / audio / transcription / summarize).
+   * Forwarded to the client so a client-store / server-hydrate restore repaints
+   * `result`.
+   */
+  reconstructResult?: (restored: GenerationRestoredResult) => TResult | null
 }
 
 /**
@@ -95,14 +101,8 @@ export interface InjectGenerationResult<
   stop: () => void
   /** Clear result, error, and return to idle */
   reset: () => void
-  /** Lightweight generation resume snapshot, if one is available */
-  resumeSnapshot: Signal<GenerationResumeSnapshot | undefined>
   /** Identity of the in-flight run while one is streaming, or null after it ends */
   resumeState: Signal<GenerationResumeState | null>
-  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
-  pendingArtifacts: Signal<Array<GenerationPendingArtifact>>
-  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
-  resultArtifacts: Signal<Array<PersistedArtifactRef>>
 }
 
 // `TTransformed` infers from the `onResult` return position (a covariant
@@ -135,29 +135,10 @@ export function injectGeneration<
   const isLoading = signal(false)
   const error = signal<Error | undefined>(undefined)
   const status = signal<GenerationClientState>('idle')
-  const resumeSnapshot = signal<GenerationResumeSnapshot | undefined>(
-    options.initialResumeSnapshot,
-  )
   const resumeState = signal<GenerationResumeState | null>(
     options.initialResumeSnapshot?.resumeState ?? null,
   )
-  const pendingArtifacts = signal<Array<GenerationPendingArtifact>>(
-    options.initialResumeSnapshot?.pendingArtifacts ?? [],
-  )
-  const resultArtifacts = signal<Array<PersistedArtifactRef>>(
-    options.initialResumeSnapshot?.result?.artifacts ?? [],
-  )
   let disposed = false
-
-  const setResumeSnapshotState = (
-    snapshot: GenerationResumeSnapshot | undefined,
-  ) => {
-    if (disposed) return
-    resumeSnapshot.set(snapshot)
-    resumeState.set(snapshot?.resumeState ?? null)
-    pendingArtifacts.set(snapshot?.pendingArtifacts ?? [])
-    resultArtifacts.set(snapshot?.result?.artifacts ?? [])
-  }
 
   const bodySource =
     options.body !== undefined ? toReactive(options.body) : undefined
@@ -172,6 +153,9 @@ export function injectGeneration<
     ...(options.initialResumeSnapshot !== undefined && {
       initialResumeSnapshot: options.initialResumeSnapshot,
     }),
+    ...(options.reconstructResult
+      ? { reconstructResult: options.reconstructResult }
+      : {}),
     devtoolsBridgeFactory: createGenerationDevtoolsBridge,
     devtools: {
       ...options.devtools,
@@ -205,7 +189,9 @@ export function injectGeneration<
     onStatusChange: (s: GenerationClientState) => {
       if (!disposed) status.set(s)
     },
-    onResumeSnapshotChange: setResumeSnapshotState,
+    onResumeStateChange: (rs: GenerationResumeState | null) => {
+      if (!disposed) resumeState.set(rs)
+    },
   }
 
   let client: GenerationClient<TInput, TResult, TOutput>
@@ -257,9 +243,6 @@ export function injectGeneration<
     status: status.asReadonly(),
     stop: () => client.stop(),
     reset: () => client.reset(),
-    resumeSnapshot: resumeSnapshot.asReadonly(),
     resumeState: resumeState.asReadonly(),
-    pendingArtifacts: pendingArtifacts.asReadonly(),
-    resultArtifacts: resultArtifacts.asReadonly(),
   }
 }

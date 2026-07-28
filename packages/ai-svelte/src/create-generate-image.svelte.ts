@@ -1,4 +1,5 @@
 import { createGeneration } from './create-generation.svelte'
+import { reconstructImageResult } from '@tanstack/ai-client'
 import type {
   CreateGenerationOptions,
   CreateGenerationReturn,
@@ -125,6 +126,7 @@ export function createGenerateImage<TTransformed = void>(
   >({
     ...options,
     devtools,
+    reconstructResult: reconstructImageResult,
   })
 
   return {
@@ -145,17 +147,8 @@ export function createGenerateImage<TTransformed = void>(
     reset: gen.reset,
     updateBody: gen.updateBody,
     dispose: gen.dispose,
-    get resumeSnapshot() {
-      return gen.resumeSnapshot
-    },
     get resumeState() {
       return gen.resumeState
-    },
-    get pendingArtifacts() {
-      return gen.pendingArtifacts
-    },
-    get resultArtifacts() {
-      return gen.resultArtifacts
     },
   }
 }

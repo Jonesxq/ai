@@ -17,7 +17,6 @@ import type {
   ConnectConnectionAdapter,
   GenerationClientState,
   GenerationFetcher,
-  GenerationPendingArtifact,
   GenerationPersistence,
   GenerationResumeSnapshot,
   GenerationResumeState,
@@ -27,7 +26,6 @@ import type {
   VideoStatusInfo,
 } from '@tanstack/ai-client'
 import type { StreamChunk } from '@tanstack/ai'
-import type { PersistedArtifactRef } from '@tanstack/ai/client'
 
 let nextId = 0
 
@@ -70,10 +68,7 @@ export interface InjectGenerateVideoResult<TOutput = VideoGenerateResult> {
   status: Signal<GenerationClientState>
   stop: () => void
   reset: () => void
-  resumeSnapshot: Signal<GenerationResumeSnapshot | undefined>
   resumeState: Signal<GenerationResumeState | null>
-  pendingArtifacts: Signal<Array<GenerationPendingArtifact>>
-  resultArtifacts: Signal<Array<PersistedArtifactRef>>
 }
 
 // `TTransformed` infers from the `onResult` return position so the callback
@@ -103,29 +98,10 @@ export function injectGenerateVideo<TTransformed = void>(
   const isLoading = signal(false)
   const error = signal<Error | undefined>(undefined)
   const status = signal<GenerationClientState>('idle')
-  const resumeSnapshot = signal<GenerationResumeSnapshot | undefined>(
-    options.initialResumeSnapshot,
-  )
   const resumeState = signal<GenerationResumeState | null>(
     options.initialResumeSnapshot?.resumeState ?? null,
   )
-  const pendingArtifacts = signal<Array<GenerationPendingArtifact>>(
-    options.initialResumeSnapshot?.pendingArtifacts ?? [],
-  )
-  const resultArtifacts = signal<Array<PersistedArtifactRef>>(
-    options.initialResumeSnapshot?.result?.artifacts ?? [],
-  )
   let disposed = false
-
-  const setResumeSnapshotState = (
-    snapshot: GenerationResumeSnapshot | undefined,
-  ) => {
-    if (disposed) return
-    resumeSnapshot.set(snapshot)
-    resumeState.set(snapshot?.resumeState ?? null)
-    pendingArtifacts.set(snapshot?.pendingArtifacts ?? [])
-    resultArtifacts.set(snapshot?.result?.artifacts ?? [])
-  }
 
   const bodySource =
     options.body !== undefined ? toReactive(options.body) : undefined
@@ -186,7 +162,9 @@ export function injectGenerateVideo<TTransformed = void>(
     onVideoStatusChange: (s: VideoStatusInfo | null) => {
       if (!disposed) videoStatus.set(s)
     },
-    onResumeSnapshotChange: setResumeSnapshotState,
+    onResumeStateChange: (rs: GenerationResumeState | null) => {
+      if (!disposed) resumeState.set(rs)
+    },
   }
 
   let client: VideoGenerationClient<TOutput>
@@ -240,9 +218,6 @@ export function injectGenerateVideo<TTransformed = void>(
     status: status.asReadonly(),
     stop: () => client.stop(),
     reset: () => client.reset(),
-    resumeSnapshot: resumeSnapshot.asReadonly(),
     resumeState: resumeState.asReadonly(),
-    pendingArtifacts: pendingArtifacts.asReadonly(),
-    resultArtifacts: resultArtifacts.asReadonly(),
   }
 }

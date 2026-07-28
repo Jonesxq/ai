@@ -1,4 +1,5 @@
 import { injectGeneration } from './inject-generation'
+import { reconstructTranscriptionResult } from '@tanstack/ai-client'
 import type { Signal } from '@angular/core'
 import type { TranscriptionResult } from '@tanstack/ai'
 import type {
@@ -17,7 +18,7 @@ export type InjectTranscriptionOptions<TOutput = TranscriptionResult> = Omit<
     TranscriptionResult,
     TOutput
   >,
-  'onResult'
+  'onResult' | 'reconstructResult'
 > & {
   onResult?: (result: TranscriptionResult) => TOutput | null | void
 }
@@ -52,6 +53,7 @@ export function injectTranscription<TTransformed = void>(
   >({
     ...options,
     devtools,
+    reconstructResult: reconstructTranscriptionResult,
   })
   return generation
 }

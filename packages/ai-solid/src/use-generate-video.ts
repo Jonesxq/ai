@@ -14,7 +14,6 @@ import type {
   ConnectConnectionAdapter,
   GenerationClientState,
   GenerationFetcher,
-  GenerationPendingArtifact,
   GenerationPersistence,
   GenerationResumeSnapshot,
   GenerationResumeState,
@@ -23,7 +22,6 @@ import type {
   VideoGenerateResult,
   VideoStatusInfo,
 } from '@tanstack/ai-client'
-import type { PersistedArtifactRef } from '@tanstack/ai/client'
 import type { Accessor } from 'solid-js'
 
 /**
@@ -101,14 +99,8 @@ export interface UseGenerateVideoReturn<TOutput = VideoGenerateResult> {
   stop: () => void
   /** Clear all state and return to idle */
   reset: () => void
-  /** Lightweight generation resume snapshot, if one is available */
-  resumeSnapshot: Accessor<GenerationResumeSnapshot | undefined>
   /** Identity of the in-flight run while one is streaming, or null after it ends */
   resumeState: Accessor<GenerationResumeState | null>
-  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
-  pendingArtifacts: Accessor<Array<GenerationPendingArtifact>>
-  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
-  resultArtifacts: Accessor<Array<PersistedArtifactRef>>
 }
 
 /**
@@ -167,9 +159,10 @@ export function useGenerateVideo<TTransformed = void>(
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<Error | undefined>(undefined)
   const [status, setStatus] = createSignal<GenerationClientState>('idle')
-  const [resumeSnapshot, setResumeSnapshot] = createSignal<
-    GenerationResumeSnapshot | undefined
-  >(options.initialResumeSnapshot)
+  const [resumeState, setResumeState] =
+    createSignal<GenerationResumeState | null>(
+      options.initialResumeSnapshot?.resumeState ?? null,
+    )
   let disposed = false
 
   // Built once. `untrack` keeps the option reads below from subscribing
@@ -236,10 +229,8 @@ export function useGenerateVideo<TTransformed = void>(
       onVideoStatusChange: (s: VideoStatusInfo | null) => {
         if (!disposed) setVideoStatus(s)
       },
-      onResumeSnapshotChange: (
-        snapshot: GenerationResumeSnapshot | undefined,
-      ) => {
-        if (!disposed) setResumeSnapshot(snapshot)
+      onResumeStateChange: (rs: GenerationResumeState | null) => {
+        if (!disposed) setResumeState(rs)
       },
     }
 
@@ -304,18 +295,6 @@ export function useGenerateVideo<TTransformed = void>(
     status,
     stop,
     reset,
-    resumeSnapshot,
-    resumeState: () => resumeSnapshot()?.resumeState ?? null,
-    pendingArtifacts: () =>
-      resumeSnapshot()?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS,
-    resultArtifacts: () =>
-      resumeSnapshot()?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS,
+    resumeState,
   }
 }
-
-// Stable fallbacks so the accessors keep returning the same array identity
-// while no snapshot exists. (A `createMemo` would buy nothing on top of this:
-// a populated array's identity already comes from the snapshot object, and
-// memos are one-shot under Solid's SSR build.)
-const EMPTY_PENDING_ARTIFACTS: Array<GenerationPendingArtifact> = []
-const EMPTY_RESULT_ARTIFACTS: Array<PersistedArtifactRef> = []

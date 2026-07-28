@@ -1,4 +1,5 @@
 import { injectGeneration } from './inject-generation'
+import { reconstructImageResult } from '@tanstack/ai-client'
 import type { Signal } from '@angular/core'
 import type { ImageGenerationResult } from '@tanstack/ai'
 import type {
@@ -13,7 +14,7 @@ import type {
 
 export type InjectGenerateImageOptions<TOutput = ImageGenerationResult> = Omit<
   InjectGenerationOptions<ImageGenerateInput, ImageGenerationResult, TOutput>,
-  'onResult'
+  'onResult' | 'reconstructResult'
 > & {
   onResult?: (result: ImageGenerationResult) => TOutput | null | void
 }
@@ -48,6 +49,7 @@ export function injectGenerateImage<TTransformed = void>(
   >({
     ...options,
     devtools,
+    reconstructResult: reconstructImageResult,
   })
   return generation
 }

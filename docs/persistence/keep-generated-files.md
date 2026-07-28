@@ -57,7 +57,15 @@ export async function POST(request: Request) {
     adapter: openaiImage('gpt-image-2'),
     prompt: input.prompt,
     stream: true,
-    middleware: [withGenerationPersistence(persistence)],
+    middleware: [
+      withGenerationPersistence(persistence, {
+        // Stamp the durable serve URL (the GET route below) onto every
+        // persisted artifact ref, and rewrite the live result's media field to
+        // it. Both the live and the restored result then render from your own
+        // origin instead of the provider's expiring link.
+        artifactUrl: (ref) => `/api/generate/image?id=${ref.artifactId}`,
+      }),
+    ],
   })
 
   return toServerSentEventsResponse(stream)
@@ -88,9 +96,25 @@ export async function GET(request: Request) {
 development and tests; point `jobs` / `artifacts` / `blobs` at a durable backend
 for production. Control what gets captured with `withGenerationPersistence`'s
 `extractArtifacts` (return your own descriptors) and `nameArtifact` (name each
-file) options. On the client, the observed references show up on the generation
-hook as `resultArtifacts` (and `pendingArtifacts` while streaming), so the UI
-can link straight to this serve route.
+file) options.
+
+## Wire the durable URL through to the client
+
+`artifactUrl` is what makes the stored bytes reachable from the client without
+any extra plumbing. For each persisted ref it returns the app-origin URL that
+serves those bytes (the `GET` route above), and `withGenerationPersistence`
+does two things with it: it stamps the URL onto the ref (`ref.url`) and it
+rewrites the live result's media field to the same URL — `result.images[i].url`
+for images, `result.url` for a video, `result.audio.url` for audio. So the live
+result already points at your origin, not the provider's expiring link.
+
+Those durable refs ride along on `result.artifacts`, and they are what a reload
+restores from. In [Generation persistence](./generation-persistence), the
+generation hook rebuilds `result` from the persisted refs on mount, resolving
+each media field to its durable `ref.url` — so the restored result renders the
+same media the live run showed. The refs are the only artifact surface: there
+are no separate top-level artifact fields on the hook, final refs live on
+`result.artifacts` and in-flight ones on `resumeState.pendingArtifacts`.
 
 ## Where to go next
 

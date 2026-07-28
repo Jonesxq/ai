@@ -1,5 +1,6 @@
 import {
   GENERATION_EVENTS,
+  clientStateFromResumeStatus,
   createGenerationResultSnapshot,
   parseGenerationResumeSnapshot,
   updateGenerationResumeSnapshot,
@@ -23,6 +24,8 @@ import type {
   GenerationClientState,
   GenerationFetcher,
   GenerationResumeSnapshot,
+  GenerationRestoredResult,
+  GenerationResumeState,
   GenerationPersistence,
 } from './generation-types'
 
@@ -43,6 +46,12 @@ interface GenerationCallbacks<TResult, TOutput> {
   onStatusChange?: ((status: GenerationClientState) => void) | undefined
   onResumeSnapshotChange?:
     | ((snapshot: GenerationResumeSnapshot | undefined) => void)
+    | undefined
+  onResumeStateChange?:
+    | ((resumeState: GenerationResumeState | null) => void)
+    | undefined
+  reconstructResult?:
+    | ((restored: GenerationRestoredResult) => TResult | null)
     | undefined
 }
 
@@ -152,6 +161,8 @@ export class GenerationClient<
       onErrorChange: options.onErrorChange,
       onStatusChange: options.onStatusChange,
       onResumeSnapshotChange: options.onResumeSnapshotChange,
+      onResumeStateChange: options.onResumeStateChange,
+      reconstructResult: options.reconstructResult,
     }
 
     this.devtoolsMetadata = this.createDevtoolsMetadata(options.devtools)
@@ -384,7 +395,7 @@ export class GenerationClient<
         resumeState: null,
         status: 'idle',
       }
-      this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
+      this.notifyResumeSnapshotChanged()
       void this.persistResumeSnapshot(this.resumeSnapshot)
     }
   }
@@ -586,8 +597,86 @@ export class GenerationClient<
       this.resumeSnapshot,
       chunk,
     )
-    this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
+    this.notifyResumeSnapshotChanged()
     void this.persistResumeSnapshot(this.resumeSnapshot)
+  }
+
+  /**
+   * Notify the (internal) snapshot listener AND emit the public resume state.
+   * The snapshot stays internal (persistence + devtools); the hook consumes
+   * `resumeState`, mirroring the chat client.
+   */
+  private notifyResumeSnapshotChanged(): void {
+    this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
+    this.emitResumeState()
+  }
+
+  /**
+   * Derive the public `resumeState` from the internal snapshot: the in-flight
+   * run identity, with any in-flight artifact refs folded under it. `null` once
+   * no run is in flight.
+   */
+  private emitResumeState(): void {
+    const snapshot = this.resumeSnapshot
+    const state = snapshot?.resumeState
+    const resumeState: GenerationResumeState | null = state
+      ? {
+          ...state,
+          ...(snapshot?.pendingArtifacts && snapshot.pendingArtifacts.length > 0
+            ? { pendingArtifacts: [...snapshot.pendingArtifacts] }
+            : {}),
+        }
+      : null
+    this.callbacksRef.onResumeStateChange?.(resumeState)
+  }
+
+  /**
+   * Repaint the normal fields from a restored snapshot (client store or server
+   * hydrate), so a reload presents the run in `result` / `status` / `error`
+   * exactly as a just-finished run would, never a bolt-on snapshot object.
+   * `isLoading` stays false: the client never auto-tails a restored run. The
+   * snapshot is not re-persisted here (it came from storage / the server).
+   */
+  private repaintFromSnapshot(snapshot: GenerationResumeSnapshot): void {
+    this.resumeSnapshot = snapshot
+    this.notifyResumeSnapshotChanged()
+    this.setStatus(clientStateFromResumeStatus(snapshot.status))
+    this.setError(
+      snapshot.error
+        ? Object.assign(
+            new Error(snapshot.error.message),
+            snapshot.error.code ? { code: snapshot.error.code } : {},
+          )
+        : undefined,
+    )
+    const restored = this.reconstructRestoredResult(snapshot)
+    if (restored !== null) this.setResult(restored)
+  }
+
+  /**
+   * Build the restorable result shape from the snapshot and hand it to the
+   * per-activity `reconstructResult` mapper (injected by the specialized
+   * client/hook, which knows the concrete result type). Returns `null` when no
+   * mapper is set or it declines — then `result` simply stays null.
+   */
+  private reconstructRestoredResult(
+    snapshot: GenerationResumeSnapshot,
+  ): TResult | null {
+    const build = this.callbacksRef.reconstructResult
+    if (!build) return null
+    const result = snapshot.result
+    const restored: GenerationRestoredResult = {
+      ...(result?.id !== undefined ? { id: result.id } : {}),
+      ...(result?.model !== undefined ? { model: result.model } : {}),
+      ...(result?.status !== undefined ? { status: result.status } : {}),
+      ...(result?.jobId !== undefined ? { jobId: result.jobId } : {}),
+      ...(result?.expiresAt !== undefined ? { expiresAt: result.expiresAt } : {}),
+      ...(result?.text !== undefined ? { text: result.text } : {}),
+      ...(result?.usage !== undefined ? { usage: result.usage } : {}),
+      ...(snapshot.activity !== undefined ? { activity: snapshot.activity } : {}),
+      artifacts: result?.artifacts ?? [],
+    }
+    return build(restored)
   }
 
   /**
@@ -613,7 +702,7 @@ export class GenerationClient<
           ? { result: { ...previous.result } }
           : {}),
     }
-    this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
+    this.notifyResumeSnapshotChanged()
     void this.persistResumeSnapshot(this.resumeSnapshot)
   }
 
@@ -638,14 +727,14 @@ export class GenerationClient<
       ...(previous?.result ? { result: { ...previous.result } } : {}),
       error: { message: error.message },
     }
-    this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
+    this.notifyResumeSnapshotChanged()
     void this.persistResumeSnapshot(this.resumeSnapshot)
   }
 
   private clearResumeSnapshot(): void {
     this.resumeSnapshot = undefined
     this.queuedSnapshotSignature = undefined
-    this.callbacksRef.onResumeSnapshotChange?.(undefined)
+    this.notifyResumeSnapshotChanged()
     if (!this.resumePersistence) {
       return
     }
@@ -691,8 +780,7 @@ export class GenerationClient<
     // Live state wins: adopt the stored snapshot only if nothing has been
     // observed since construction.
     if (this.resumeSnapshot || this.isLoading || this.status !== 'idle') return
-    this.resumeSnapshot = snapshot
-    this.callbacksRef.onResumeSnapshotChange?.(snapshot)
+    this.repaintFromSnapshot(snapshot)
   }
 
   /**
@@ -721,8 +809,7 @@ export class GenerationClient<
       // Re-check: a send may have started while the fetch was in flight.
       if (this.resumeSnapshot || this.isLoading || this.status !== 'idle')
         return
-      this.resumeSnapshot = snapshot
-      this.callbacksRef.onResumeSnapshotChange?.(snapshot)
+      this.repaintFromSnapshot(snapshot)
     })()
   }
 

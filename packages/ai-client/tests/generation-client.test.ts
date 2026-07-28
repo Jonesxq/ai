@@ -4,13 +4,36 @@ import {
   GenerationClient,
   UnsupportedResponseStreamError,
   VideoGenerationClient,
+  reconstructImageResult,
 } from '../src'
 import type { StreamChunk } from '@tanstack/ai/client'
+import type { PersistedArtifactRef } from '@tanstack/ai/client'
 import type {
   ConnectConnectionAdapter,
   GenerationHydrationResult,
 } from '../src/connection-adapters'
 import type { GenerationResumeSnapshot, GenerationPersistence } from '../src'
+
+// A durable output image artifact carrying an app-origin serve URL, used to
+// verify the restore-path result repaint via reconstructImageResult.
+const restoredImageArtifact: PersistedArtifactRef = {
+  role: 'output',
+  artifactId: 'artifact-image-1',
+  threadId: 'thread-img',
+  runId: 'run-img',
+  name: 'image.png',
+  mimeType: 'image/png',
+  size: 2048,
+  createdAt: '2026-07-06T00:00:00.000Z',
+  url: '/api/artifacts/artifact-image-1',
+  source: {
+    activity: 'image',
+    path: 'runs/run-img/image.png',
+    provider: 'test',
+    model: 'test-image',
+    mediaType: 'image',
+  },
+}
 
 // Helper to create a mock connect-based adapter from StreamChunks
 function createMockConnection(
@@ -1506,6 +1529,77 @@ describe('GenerationClient', () => {
       )
     })
 
+    it('repaints status/result from a stored complete image snapshot via reconstructResult', async () => {
+      const snapshot: GenerationResumeSnapshot = {
+        schemaVersion: 1,
+        resumeState: null,
+        status: 'complete',
+        activity: 'image',
+        result: {
+          id: 'img-1',
+          model: 'test-image',
+          artifacts: [restoredImageArtifact],
+        },
+      }
+      const { persistence } = createMapPersistence({
+        'generation:img': snapshot,
+      })
+      const onStatusChange = vi.fn()
+      const onResumeStateChange = vi.fn()
+      const client = new GenerationClient({
+        id: 'img',
+        connection: createMockConnection([]),
+        persistence,
+        // Injected by the image hook/client — rebuilds the typed result from
+        // the durable artifact refs.
+        reconstructResult: reconstructImageResult,
+        onStatusChange,
+        onResumeStateChange,
+      })
+
+      // The completed snapshot repaints `result` (with the durable serve url)
+      // and `status`, as if the run had just finished.
+      await waitForCondition(() => {
+        expect(client.getResult()).toEqual({
+          id: 'img-1',
+          model: 'test-image',
+          images: [{ url: '/api/artifacts/artifact-image-1' }],
+          artifacts: [restoredImageArtifact],
+        })
+      })
+      expect(client.getStatus()).toBe('success')
+      // A completed run has no in-flight identity.
+      expect(onResumeStateChange).toHaveBeenLastCalledWith(null)
+    })
+
+    it('emits onResumeStateChange with the in-flight identity from a stored running snapshot', async () => {
+      const snapshot: GenerationResumeSnapshot = {
+        schemaVersion: 1,
+        resumeState: { threadId: 'thread-run', runId: 'run-run' },
+        status: 'running',
+      }
+      const { persistence } = createMapPersistence({
+        'generation:running': snapshot,
+      })
+      const onResumeStateChange = vi.fn()
+      const client = new GenerationClient({
+        id: 'running',
+        connection: createMockConnection([]),
+        persistence,
+        onResumeStateChange,
+      })
+
+      await waitForCondition(() => {
+        expect(onResumeStateChange).toHaveBeenCalledWith({
+          threadId: 'thread-run',
+          runId: 'run-run',
+        })
+      })
+      // A restored running run presents as `generating` but never auto-tails.
+      expect(client.getStatus()).toBe('generating')
+      expect(client.getIsLoading()).toBe(false)
+    })
+
     it('skips hydration when an explicit initialResumeSnapshot seed is provided', async () => {
       const { persistence } = createMapPersistence({
         'generation:hero': storedSnapshot,
@@ -1816,6 +1910,42 @@ describe('GenerationClient', () => {
       expect(onResumeSnapshotChange).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'complete' }),
       )
+    })
+
+    it('repaints result from the server snapshot via reconstructResult (image)', async () => {
+      const { connection } = createHydratingConnection({
+        resumeSnapshot: {
+          schemaVersion: 1,
+          resumeState: null,
+          status: 'complete',
+          activity: 'image',
+          result: {
+            id: 'srv-img',
+            model: 'test-image',
+            artifacts: [restoredImageArtifact],
+          },
+        },
+        activeRun: null,
+      })
+      const onResumeStateChange = vi.fn()
+      const client = new GenerationClient({
+        threadId: 'thread-img-server',
+        connection,
+        persistence: true,
+        reconstructResult: reconstructImageResult,
+        onResumeStateChange,
+      })
+
+      await waitForCondition(() => {
+        expect(client.getResult()).toEqual({
+          id: 'srv-img',
+          model: 'test-image',
+          images: [{ url: '/api/artifacts/artifact-image-1' }],
+          artifacts: [restoredImageArtifact],
+        })
+      })
+      expect(client.getStatus()).toBe('success')
+      expect(onResumeStateChange).toHaveBeenLastCalledWith(null)
     })
 
     it('does nothing when the connection exposes no hydrateGeneration', async () => {

@@ -1,4 +1,5 @@
 import { useGeneration } from './use-generation'
+import { reconstructAudioResult } from '@tanstack/ai-client'
 import type { AudioGenerationResult, StreamChunk } from '@tanstack/ai'
 import type {
   AIDevtoolsDisplayOptions,
@@ -6,13 +7,11 @@ import type {
   ConnectConnectionAdapter,
   GenerationClientState,
   GenerationFetcher,
-  GenerationPendingArtifact,
   GenerationPersistence,
   GenerationResumeSnapshot,
   GenerationResumeState,
   InferGenerationOutputFromReturn,
 } from '@tanstack/ai-client'
-import type { PersistedArtifactRef } from '@tanstack/ai/client'
 
 /**
  * Options for the useGenerateAudio hook.
@@ -81,14 +80,8 @@ export interface UseGenerateAudioReturn<TOutput = AudioGenerationResult> {
   stop: () => void
   /** Clear result, error, and return to idle */
   reset: () => void
-  /** Lightweight generation resume snapshot, if one is available */
-  resumeSnapshot: GenerationResumeSnapshot | undefined
   /** Identity of the in-flight run while one is streaming, or null after it ends */
   resumeState: GenerationResumeState | null
-  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
-  pendingArtifacts: Array<GenerationPendingArtifact>
-  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
-  resultArtifacts: Array<PersistedArtifactRef>
 }
 
 /**
@@ -141,6 +134,7 @@ export function useGenerateAudio<TTransformed = void>(
   >({
     ...options,
     devtools,
+    reconstructResult: reconstructAudioResult,
   })
 
   return generation

@@ -1,4 +1,5 @@
 import { useGeneration } from './use-generation'
+import { reconstructSummarizeResult } from '@tanstack/ai-client'
 import type {
   UseGenerationOptions,
   UseGenerationReturn,
@@ -121,6 +122,7 @@ export function useSummarize<TTransformed = void>(
   >({
     ...options,
     devtools,
+    reconstructResult: reconstructSummarizeResult,
   })
 
   return generation

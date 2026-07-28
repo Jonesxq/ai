@@ -1,4 +1,5 @@
 import { useGeneration } from './use-generation'
+import { reconstructAudioResult } from '@tanstack/ai-client'
 import type {
   UseGenerationOptions,
   UseGenerationReturn,
@@ -115,6 +116,7 @@ export function useGenerateAudio<TTransformed = void>(
   >({
     ...options,
     devtools,
+    reconstructResult: reconstructAudioResult,
   })
 
   return generation

@@ -6,7 +6,6 @@ import type {
   ConnectConnectionAdapter,
   GenerationClientState,
   GenerationFetcher,
-  GenerationPendingArtifact,
   GenerationPersistence,
   GenerationResumeSnapshot,
   GenerationResumeState,
@@ -15,7 +14,6 @@ import type {
   VideoGenerateResult,
   VideoStatusInfo,
 } from '@tanstack/ai-client'
-import type { PersistedArtifactRef } from '@tanstack/ai/client'
 
 /**
  * Options for the createGenerateVideo function.
@@ -96,14 +94,8 @@ export interface CreateGenerateVideoReturn<TOutput = VideoGenerateResult> {
   dispose: () => void
   /** Update additional body parameters */
   updateBody: (body: Record<string, any>) => void
-  /** Lightweight generation resume snapshot, if one is available */
-  readonly resumeSnapshot: GenerationResumeSnapshot | undefined
   /** Identity of the in-flight run while one is streaming, or null after it ends */
   readonly resumeState: GenerationResumeState | null
-  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
-  readonly pendingArtifacts: Array<GenerationPendingArtifact>
-  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
-  readonly resultArtifacts: Array<PersistedArtifactRef>
 }
 
 /**
@@ -161,17 +153,10 @@ export function createGenerateVideo<TTransformed = void>(
   let isLoading = $state(false)
   let error = $state<Error | undefined>(undefined)
   let status = $state<GenerationClientState>('idle')
-  let resumeSnapshot = $state<GenerationResumeSnapshot | undefined>(
-    options.initialResumeSnapshot,
+  let resumeState = $state<GenerationResumeState | null>(
+    options.initialResumeSnapshot?.resumeState ?? null,
   )
   let disposed = false
-
-  const setResumeSnapshotState = (
-    snapshot: GenerationResumeSnapshot | undefined,
-  ) => {
-    if (disposed) return
-    resumeSnapshot = snapshot
-  }
 
   // `body` uses a conditional spread because `VideoGenerationClientOptions.body`
   // is declared `body?: Record<string, any>` (absent vs. present) under
@@ -239,7 +224,10 @@ export function createGenerateVideo<TTransformed = void>(
       if (disposed) return
       videoStatus = s
     },
-    onResumeSnapshotChange: setResumeSnapshotState,
+    onResumeStateChange: (rs: GenerationResumeState | null) => {
+      if (disposed) return
+      resumeState = rs
+    },
   }
 
   let client: VideoGenerationClient<TOutput>
@@ -320,17 +308,8 @@ export function createGenerateVideo<TTransformed = void>(
     reset,
     dispose,
     updateBody,
-    get resumeSnapshot() {
-      return resumeSnapshot
-    },
     get resumeState() {
-      return resumeSnapshot?.resumeState ?? null
-    },
-    get pendingArtifacts() {
-      return resumeSnapshot?.pendingArtifacts ?? []
-    },
-    get resultArtifacts() {
-      return resumeSnapshot?.result?.artifacts ?? []
+      return resumeState
     },
   }
 }

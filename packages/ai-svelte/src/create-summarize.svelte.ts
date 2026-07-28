@@ -1,4 +1,5 @@
 import { createGeneration } from './create-generation.svelte'
+import { reconstructSummarizeResult } from '@tanstack/ai-client'
 import type {
   CreateGenerationOptions,
   CreateGenerationReturn,
@@ -120,6 +121,7 @@ export function createSummarize<TTransformed = void>(
   >({
     ...options,
     devtools,
+    reconstructResult: reconstructSummarizeResult,
   })
 
   return {
@@ -140,17 +142,8 @@ export function createSummarize<TTransformed = void>(
     reset: gen.reset,
     updateBody: gen.updateBody,
     dispose: gen.dispose,
-    get resumeSnapshot() {
-      return gen.resumeSnapshot
-    },
     get resumeState() {
       return gen.resumeState
-    },
-    get pendingArtifacts() {
-      return gen.pendingArtifacts
-    },
-    get resultArtifacts() {
-      return gen.resultArtifacts
     },
   }
 }

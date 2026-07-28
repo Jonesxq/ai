@@ -1,4 +1,5 @@
 import { injectGeneration } from './inject-generation'
+import { reconstructAudioResult } from '@tanstack/ai-client'
 import type { AudioGenerationResult, StreamChunk } from '@tanstack/ai'
 import type {
   AIDevtoolsDisplayOptions,
@@ -123,6 +124,7 @@ export function injectGenerateAudio<TTransformed = void>(
   >({
     ...options,
     devtools,
+    reconstructResult: reconstructAudioResult,
   })
 
   return generation

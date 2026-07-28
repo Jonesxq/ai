@@ -15,13 +15,12 @@ import type {
   GenerationClientOptions,
   GenerationClientState,
   GenerationFetcher,
-  GenerationPendingArtifact,
   GenerationPersistence,
+  GenerationRestoredResult,
   GenerationResumeSnapshot,
   GenerationResumeState,
   InferGenerationOutputFromReturn,
 } from '@tanstack/ai-client'
-import type { PersistedArtifactRef } from '@tanstack/ai/client'
 import type { DeepReadonly, ShallowRef } from 'vue'
 
 /**
@@ -73,6 +72,13 @@ export interface UseGenerationOptions<TInput, TResult, TOutput = TResult> {
   onProgress?: (progress: number, message?: string) => void
   /** Callback for each stream chunk (connect-based adapter mode only) */
   onChunk?: (chunk: StreamChunk) => void
+  /**
+   * @internal Rebuild a typed result from a restored snapshot, injected by each
+   * specialized composable (image / audio / transcription / summarize).
+   * Forwarded to the client so a client-store / server-hydrate restore repaints
+   * `result`.
+   */
+  reconstructResult?: (restored: GenerationRestoredResult) => TResult | null
 }
 
 /**
@@ -99,14 +105,8 @@ export interface UseGenerationReturn<
   stop: () => void
   /** Clear result, error, and return to idle */
   reset: () => void
-  /** Lightweight generation resume snapshot, if one is available */
-  resumeSnapshot: DeepReadonly<ShallowRef<GenerationResumeSnapshot | undefined>>
   /** Identity of the in-flight run while one is streaming, or null after it ends */
   resumeState: DeepReadonly<ShallowRef<GenerationResumeState | null>>
-  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
-  pendingArtifacts: DeepReadonly<ShallowRef<Array<GenerationPendingArtifact>>>
-  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
-  resultArtifacts: DeepReadonly<ShallowRef<Array<PersistedArtifactRef>>>
 }
 
 /**
@@ -157,31 +157,10 @@ export function useGeneration<
   const isLoading = shallowRef(false)
   const error = shallowRef<Error | undefined>(undefined)
   const status = shallowRef<GenerationClientState>('idle')
-  const resumeSnapshot = shallowRef<GenerationResumeSnapshot | undefined>(
-    options.initialResumeSnapshot,
-  )
   const resumeState = shallowRef<GenerationResumeState | null>(
     options.initialResumeSnapshot?.resumeState ?? null,
   )
-  const pendingArtifacts = shallowRef<Array<GenerationPendingArtifact>>(
-    options.initialResumeSnapshot?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS,
-  )
-  const resultArtifacts = shallowRef<Array<PersistedArtifactRef>>(
-    options.initialResumeSnapshot?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS,
-  )
   let disposed = false
-
-  const setResumeSnapshotState = (
-    snapshot: GenerationResumeSnapshot | undefined,
-  ) => {
-    if (disposed) return
-    resumeSnapshot.value = snapshot
-    resumeState.value = snapshot?.resumeState ?? null
-    pendingArtifacts.value =
-      snapshot?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS
-    resultArtifacts.value =
-      snapshot?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS
-  }
 
   // Conditional spread on `body`: `GenerationClientOptions.body` is a strict
   // optional (`body?: Record<string, any>`), and under EOPT we must omit the
@@ -196,6 +175,9 @@ export function useGeneration<
     ...(options.initialResumeSnapshot !== undefined && {
       initialResumeSnapshot: options.initialResumeSnapshot,
     }),
+    ...(options.reconstructResult
+      ? { reconstructResult: options.reconstructResult }
+      : {}),
     devtoolsBridgeFactory: createGenerationDevtoolsBridge,
     devtools: {
       ...options.devtools,
@@ -233,7 +215,10 @@ export function useGeneration<
       if (disposed) return
       status.value = s
     },
-    onResumeSnapshotChange: setResumeSnapshotState,
+    onResumeStateChange: (rs: GenerationResumeState | null) => {
+      if (disposed) return
+      resumeState.value = rs
+    },
   }
 
   let client: GenerationClient<TInput, TResult, TOutput>
@@ -302,14 +287,6 @@ export function useGeneration<
     status: readonly(status),
     stop,
     reset,
-    resumeSnapshot: readonly(resumeSnapshot),
     resumeState: readonly(resumeState),
-    pendingArtifacts: readonly(pendingArtifacts),
-    resultArtifacts: readonly(resultArtifacts),
   }
 }
-
-// Shared fallbacks so a snapshot change that leaves the artifact lists empty
-// reassigns the same reference and doesn't trigger dependent watchers.
-const EMPTY_PENDING_ARTIFACTS: Array<GenerationPendingArtifact> = []
-const EMPTY_RESULT_ARTIFACTS: Array<PersistedArtifactRef> = []

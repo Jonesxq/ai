@@ -118,9 +118,18 @@ randomize per mount.
 
 The generation hooks (`useGenerateImage`, `useGenerateVideo`, `useGeneration`,
 `useSummarize`, `useTranscription`, …) take the **same `persistence` option** as
-`useChat` — `boolean | adapter` — with the same two-mode split. Whichever mode,
-what persists is a `GenerationResumeSnapshot`: run identity, status, error, and
-result metadata (ids, model, video `jobId`), **never the generated media bytes**.
+`useChat` — `boolean | adapter` — with the same two-mode split. **The hooks are
+transparent, mirroring `useChat`:** whichever mode, a reload repaints the hook's
+**normal** fields — `status` (`'idle'` / `'generating'` / `'success'` /
+`'error'`), `error`, and `result` — as if the run had just finished. There is
+**no** `resumeSnapshot`, `pendingArtifacts`, or `resultArtifacts` field. The one
+extra field is `resumeState`: the in-flight run identity (`{ threadId, runId,
+pendingArtifacts? }`) or `null` — non-null only while a run streams. The
+persisted record holds run identity, status, error, and result metadata (ids,
+model, video `jobId`), **never the generated media bytes**.
+
+The hook return is exactly `generate` / `result` / `isLoading` / `error` /
+`status` / `stop` / `reset` / `resumeState`.
 
 ### Mode A — client-driven (a storage adapter)
 
@@ -128,19 +137,25 @@ result metadata (ids, model, video `jobId`), **never the generated media bytes**
 const image = useGenerateImage({
   id: 'hero-image', // stable — the storage key is `generation:<id>`
   connection: fetchServerSentEvents('/api/generate/image'),
-  persistence: localStoragePersistence(),
+  persistence: localStoragePersistence(), // bare — no type argument
 })
-// After a reload: image.resumeSnapshot?.status is the last run's outcome.
-// image.resumeState is non-null only WHILE a run is streaming.
+// After a reload: image.status / image.result / image.error are the last run's
+// outcome, read exactly like a fresh run. image.resumeState is non-null only
+// WHILE a run is streaming.
 ```
 
 - The lightweight snapshot is cached in the browser under `generation:<id>` as a
   run streams, and read back on mount.
+- `localStoragePersistence()` (and the session / IndexedDB factories) take **no**
+  type argument here — a bare call defaults to the generation snapshot shape.
 - Hydration is automatic on mount and validated
   (`parseGenerationResumeSnapshot`); an explicit `initialResumeSnapshot` seed
   skips it.
 - The `generation:` key segment means a chat and a generation client can share
   an id and an adapter without colliding.
+- `result` needs byte storage to come back. A client snapshot never holds the
+  bytes, so on its own a reload restores `status` and `error` while `result`
+  stays `null` (see byte storage below).
 
 ### Mode B — server-driven (`persistence: true`)
 
@@ -150,14 +165,14 @@ const image = useGenerateImage({
   connection: fetchServerSentEvents('/api/generate/image'),
   persistence: true,
 })
-// After a reload: image.resumeSnapshot is the last generation for `threadId`,
-// fetched from the server — nothing was cached in the browser.
+// After a reload: image.status / image.result / image.error are the last
+// generation for `threadId`, fetched from the server — nothing was cached.
 ```
 
 - Nothing is cached client-side. On mount the client hydrates the **last
   generation** for its `threadId` from the server via the connection's
   `hydrateGeneration` handler (the SSE/HTTP adapters issue a `GET` with
-  `?threadId=` to the same endpoint URL) and repaints that snapshot.
+  `?threadId=` to the same endpoint URL) and repaints it into the normal fields.
 - The server `GET` returns `reconstructGeneration(persistence, request)` from
   `@tanstack/ai-persistence` — it resolves the job by `?jobId=` (preferred) or
   the latest job linked to `?threadId=`, and needs `stores.jobs`. Pair it with
@@ -166,12 +181,33 @@ const image = useGenerateImage({
 - Best for multi-device / compliance (no generation metadata in browser
   storage), exactly like chat Mode B.
 
+### Restoring media: byte storage + `artifactUrl`
+
+`result` comes back with its media only when the **server** persists the bytes
+(`stores.artifacts` + `stores.blobs`) AND `withGenerationPersistence` is given an
+`artifactUrl` mapper:
+
+```ts
+withGenerationPersistence(persistence, {
+  artifactUrl: (ref) => `/api/generate/image/artifact?id=${ref.artifactId}`,
+})
+```
+
+`artifactUrl` stamps a durable app-origin URL onto each persisted ref and
+rewrites the live result's media to it, so live and restored results match. The
+durable refs travel on `result.artifacts`; on restore the hook rebuilds `result`
+from them, so `result.images[i].url` (or a video's `result.url`) serves from your
+own origin. Final refs live on `result.artifacts`; in-flight ones on
+`resumeState.pendingArtifacts`. Without byte storage, a reload restores `status`
+/ `error` and `result` stays `null`.
+
 Common to both modes:
 
 - `stop()` marks the record no longer resumable; `reset()` deletes it (Mode A) or
   clears the in-memory snapshot (Mode B).
-- Nothing auto-runs from a hydrated snapshot — `generate(...)` is always
-  explicit.
+- Nothing auto-runs from a hydrated record — `generate(...)` is always explicit.
+- Use `status` / `result` for a finished run; use `resumeState` to tell that a
+  run was still generating when the page closed.
 
 ## Common mistakes
 

@@ -1,10 +1,7 @@
 import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useGenerateImage } from '@tanstack/ai-react'
-import type {
-  GenerationResumeSnapshot,
-  UseGenerateImageReturn,
-} from '@tanstack/ai-react'
+import type { UseGenerateImageReturn } from '@tanstack/ai-react'
 import {
   fetchServerSentEvents,
   localStoragePersistence,
@@ -14,12 +11,12 @@ import { generateImageFn, generateImageStreamFn } from '../lib/server-fns'
 
 // Reuse the shared web-storage adapter for the lightweight generation resume
 // snapshot. Only run identity, status, errors, and result metadata are stored
-// — never the generated image bytes. The client namespaces its record under
-// `generation:<id>`, and reads it back on mount so the last run's outcome
+// — never the generated image bytes. A bare call needs no type argument: the
+// adapter defaults to the generation snapshot shape. The client namespaces its
+// record under `generation:<id>` and reads it back on mount, repainting the
+// hook's normal `status` / `result` / `error` fields so the last run's outcome
 // survives a full page reload.
-const imageSnapshots = localStoragePersistence<GenerationResumeSnapshot>({
-  keyPrefix: 'example:',
-})
+const imageSnapshots = localStoragePersistence({ keyPrefix: 'example:' })
 
 function StreamingImageGeneration() {
   const [prompt, setPrompt] = useState('')
@@ -94,7 +91,6 @@ function PersistedImageGeneration() {
     persistence: imageSnapshots,
   })
 
-  const snapshot = hookReturn.resumeSnapshot
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-orange-500/20 bg-gray-800/50 px-4 py-3 text-sm">
@@ -103,13 +99,19 @@ function PersistedImageGeneration() {
             Run in flight:{' '}
             <span className="text-white">{hookReturn.resumeState.runId}</span>
           </p>
-        ) : snapshot ? (
+        ) : hookReturn.status === 'success' ? (
           <p className="text-gray-400">
             Last run:{' '}
             <span className="text-white">
-              {snapshot.status}
-              {snapshot.error ? ` — ${snapshot.error.message}` : ''}
-              {snapshot.result?.model ? ` (${snapshot.result.model})` : ''}
+              success
+              {hookReturn.result?.model ? ` (${hookReturn.result.model})` : ''}
+            </span>
+          </p>
+        ) : hookReturn.status === 'error' ? (
+          <p className="text-gray-400">
+            Last run:{' '}
+            <span className="text-white">
+              error{hookReturn.error ? ` — ${hookReturn.error.message}` : ''}
             </span>
           </p>
         ) : (

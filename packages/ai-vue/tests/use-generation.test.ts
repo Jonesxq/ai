@@ -9,10 +9,14 @@ import { useTranscription } from '../src/use-transcription'
 import { useSummarize } from '../src/use-summarize'
 import { useGenerateVideo } from '../src/use-generate-video'
 import { createMockConnectionAdapter } from './test-utils'
-import type { StreamChunk, TTSResult, TranscriptionResult } from '@tanstack/ai'
+import type {
+  PersistedArtifactRef,
+  StreamChunk,
+  TTSResult,
+  TranscriptionResult,
+} from '@tanstack/ai'
 import type {
   ConnectConnectionAdapter,
-  GenerationPersistence,
   GenerationResumeSnapshot,
   RunAgentInputContext,
 } from '@tanstack/ai-client'
@@ -21,7 +25,12 @@ import type { DeepReadonly } from 'vue'
 // Helper to create generation stream chunks
 function createGenerationChunks(result: unknown): Array<StreamChunk> {
   return [
-    { type: 'RUN_STARTED', runId: 'run-1', timestamp: Date.now() },
+    {
+      type: 'RUN_STARTED',
+      runId: 'run-1',
+      threadId: 'thread-1',
+      timestamp: Date.now(),
+    },
     {
       type: 'CUSTOM',
       name: 'generation:result',
@@ -31,6 +40,7 @@ function createGenerationChunks(result: unknown): Array<StreamChunk> {
     {
       type: 'RUN_FINISHED',
       runId: 'run-1',
+      threadId: 'thread-1',
       finishReason: 'stop',
       timestamp: Date.now(),
     },
@@ -120,25 +130,6 @@ function createRunContextCaptureAdapter(chunks: Array<StreamChunk>): {
     },
   }
   return { adapter, connect, runContexts }
-}
-
-/** Map-backed storage adapter standing in for localStorage/IndexedDB. */
-function createMapPersistence(
-  seed?: Record<string, GenerationResumeSnapshot>,
-): GenerationPersistence & { store: Map<string, GenerationResumeSnapshot> } {
-  const store = new Map<string, GenerationResumeSnapshot>(
-    Object.entries(seed ?? {}),
-  )
-  return {
-    store,
-    getItem: vi.fn((key: string) => store.get(key) ?? null),
-    setItem: vi.fn((key: string, value: GenerationResumeSnapshot) => {
-      store.set(key, value)
-    }),
-    removeItem: vi.fn((key: string) => {
-      store.delete(key)
-    }),
-  }
 }
 
 // Helper to create error stream chunks
@@ -354,74 +345,114 @@ describe('useGeneration', () => {
     })
   })
 
-  describe('resume snapshot persistence', () => {
-    it('hydrates a persisted snapshot into resumeSnapshot on mount', async () => {
-      const stored: GenerationResumeSnapshot = {
-        schemaVersion: 1,
-        resumeState: { threadId: 'thread-stored', runId: 'run-stored' },
-        status: 'running',
-      }
-      const persistence = createMapPersistence({
-        'generation:hydrate-me': stored,
+  describe('persistence', () => {
+    it('repaints status from a stored complete snapshot on mount without starting a run', async () => {
+      const { adapter, connect } = createRunContextCaptureAdapter(
+        createGenerationChunks({ id: '1' }),
+      )
+      const getItem = vi.fn(() => ({
+        resumeState: null,
+        status: 'complete' as const,
+        result: { id: 'result-1', model: 'image-model' },
+      }))
+
+      const { result } = renderHook(() =>
+        useGeneration({
+          id: 'hydrated',
+          connection: adapter,
+          persistence: { getItem, setItem: vi.fn(), removeItem: vi.fn() },
+        }),
+      )
+
+      await flushPromises()
+      await nextTick()
+
+      // A completed snapshot repaints the normal `status` field to `success`.
+      expect(result.status.value).toBe('success')
+      expect(getItem).toHaveBeenCalledWith('generation:hydrated')
+      expect(connect).not.toHaveBeenCalled()
+      // The base hook injects no reconstructResult, so `result` stays null.
+      expect(result.result.value).toBeNull()
+      expect(result.resumeState.value).toBeNull()
+    })
+
+    it('repaints resumeState from a stored running snapshot on mount', async () => {
+      const { adapter, connect } = createRunContextCaptureAdapter(
+        createGenerationChunks({ id: '1' }),
+      )
+      const getItem = vi.fn(() => ({
+        resumeState: { threadId: 'thread-resume', runId: 'run-resume' },
+        status: 'running' as const,
+      }))
+
+      const { result } = renderHook(() =>
+        useGeneration({
+          id: 'running-hydrate',
+          connection: adapter,
+          persistence: { getItem, setItem: vi.fn(), removeItem: vi.fn() },
+        }),
+      )
+
+      await flushPromises()
+      await nextTick()
+
+      expect(result.resumeState.value).toEqual({
+        threadId: 'thread-resume',
+        runId: 'run-resume',
+      })
+      // A restored running run presents as `generating` but never auto-tails.
+      expect(result.status.value).toBe('generating')
+      expect(result.isLoading.value).toBe(false)
+      expect(connect).not.toHaveBeenCalled()
+    })
+
+    it('server-driven (persistence: true) hydrates from the connection by threadId without a local store', async () => {
+      const { adapter, connect } = createRunContextCaptureAdapter(
+        createGenerationChunks({ id: '1' }),
+      )
+      const hydrateGeneration = vi.fn(async () => ({
+        resumeSnapshot: {
+          schemaVersion: 1 as const,
+          resumeState: null,
+          status: 'complete' as const,
+          result: { id: 'server-result', model: 'image-model' },
+        },
+        activeRun: null,
+      }))
+
+      const { result } = renderHook(() =>
+        useGeneration({
+          threadId: 'thread-server',
+          connection: { ...adapter, hydrateGeneration },
+          persistence: true,
+        }),
+      )
+
+      await flushPromises()
+      await nextTick()
+
+      // The server snapshot repaints `status` to `success`.
+      expect(result.status.value).toBe('success')
+      expect(hydrateGeneration).toHaveBeenCalledWith('thread-server')
+      expect(connect).not.toHaveBeenCalled()
+    })
+
+    it('clears resumeState once a streamed run finishes', async () => {
+      const adapter = createMockConnectionAdapter({
+        chunks: createGenerationChunks({ id: '1' }),
       })
 
       const { result } = renderHook(() =>
-        useGeneration({
-          id: 'hydrate-me',
-          fetcher: async () => ({ id: '1' }),
-          persistence,
-        }),
+        useGeneration({ connection: adapter }),
       )
 
-      // Hydration is async: it starts at construction and resolves before the
-      // first flush, so the snapshot is only visible after awaiting.
-      expect(result.resumeSnapshot.value).toBeUndefined()
+      await result.generate({ prompt: 'replay' })
       await flushPromises()
       await nextTick()
 
-      expect(persistence.getItem).toHaveBeenCalledTimes(1)
-      expect(persistence.getItem).toHaveBeenCalledWith('generation:hydrate-me')
-      expect(result.resumeSnapshot.value).toEqual(stored)
-      expect(result.resumeState.value).toEqual(stored.resumeState)
-      // Hydration alone must not start a run.
-      expect(result.isLoading.value).toBe(false)
-      expect(result.status.value).toBe('idle')
-    })
-
-    it('clears resumeSnapshot and removes the persisted record on reset', async () => {
-      const persistence = createMapPersistence()
-
-      const { result } = renderHook(() =>
-        useGeneration({
-          id: 'reset-me',
-          connection: createMockConnectionAdapter({
-            chunks: createGenerationChunks({ id: '1' }),
-          }),
-          persistence,
-        }),
-      )
-
-      await result.generate({ prompt: 'test' })
-      await flushPromises()
-      await nextTick()
-
-      expect(result.resumeSnapshot.value).toBeDefined()
-      expect(persistence.setItem).toHaveBeenCalledWith(
-        'generation:reset-me',
-        expect.objectContaining({ status: 'complete' }),
-      )
-      expect(persistence.store.get('generation:reset-me')).toBeDefined()
-
-      result.reset()
-      await flushPromises()
-      await nextTick()
-
-      expect(result.resumeSnapshot.value).toBeUndefined()
+      expect(result.status.value).toBe('success')
+      // Once the run ends the in-flight identity is gone.
       expect(result.resumeState.value).toBeNull()
-      expect(result.pendingArtifacts.value).toEqual([])
-      expect(result.resultArtifacts.value).toEqual([])
-      expect(persistence.removeItem).toHaveBeenCalledWith('generation:reset-me')
-      expect(persistence.store.has('generation:reset-me')).toBe(false)
     })
   })
 
@@ -533,6 +564,61 @@ describe('useGenerateImage', () => {
 
     expect(typeof result.stop).toBe('function')
     expect(typeof result.reset).toBe('function')
+  })
+
+  it('restores a completed image result from a durable artifact url', async () => {
+    // useGenerateImage injects `reconstructImageResult`, so a restored complete
+    // snapshot repaints `result` with the durable serve url — as if the run had
+    // just finished.
+    const artifact: PersistedArtifactRef = {
+      role: 'output',
+      artifactId: 'artifact-image-1',
+      threadId: 'thread-img',
+      runId: 'run-img',
+      name: 'image.png',
+      mimeType: 'image/png',
+      size: 2048,
+      createdAt: '2026-07-06T00:00:00.000Z',
+      url: '/api/artifacts/artifact-image-1',
+      source: {
+        activity: 'image',
+        path: 'runs/run-img/image.png',
+        provider: 'test',
+        model: 'test-image',
+        mediaType: 'image',
+      },
+    }
+    const getItem = vi.fn(() => ({
+      resumeState: null,
+      status: 'complete' as const,
+      activity: 'image' as const,
+      result: {
+        id: 'img-restored',
+        model: 'test-image',
+        artifacts: [artifact],
+      },
+    }))
+    const adapter = createMockConnectionAdapter()
+
+    const { result } = renderHook(() =>
+      useGenerateImage({
+        id: 'img-hydrate',
+        connection: adapter,
+        persistence: { getItem, setItem: vi.fn(), removeItem: vi.fn() },
+      }),
+    )
+
+    await flushPromises()
+    await nextTick()
+
+    expect(result.status.value).toBe('success')
+    expect(result.result.value).toEqual({
+      id: 'img-restored',
+      model: 'test-image',
+      images: [{ url: '/api/artifacts/artifact-image-1' }],
+      artifacts: [artifact],
+    })
+    expect(result.resumeState.value).toBeNull()
   })
 })
 
@@ -963,8 +1049,7 @@ describe('useGenerateVideo', () => {
     expect(getItem).not.toHaveBeenCalled()
     expect(result.isLoading.value).toBe(false)
     expect(result.status.value).toBe('idle')
-    // The persisted snapshot remains exposed as read-only state.
-    expect(result.resumeSnapshot.value).toEqual(videoResumeSnapshot)
+    // The seeded in-flight identity is exposed as read-only `resumeState`.
     expect(result.resumeState.value).toEqual(videoResumeSnapshot.resumeState)
   })
 

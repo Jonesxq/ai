@@ -7,7 +7,6 @@ import type {
   ConnectConnectionAdapter,
   GenerationClientState,
   GenerationFetcher,
-  GenerationPendingArtifact,
   GenerationPersistence,
   GenerationResumeSnapshot,
   GenerationResumeState,
@@ -16,7 +15,6 @@ import type {
   VideoGenerateResult,
   VideoStatusInfo,
 } from '@tanstack/ai-client'
-import type { PersistedArtifactRef } from '@tanstack/ai/client'
 
 /**
  * Options for the useGenerateVideo hook.
@@ -91,14 +89,8 @@ export interface UseGenerateVideoReturn<TOutput = VideoGenerateResult> {
   stop: () => void
   /** Clear all state and return to idle */
   reset: () => void
-  /** Lightweight generation resume snapshot, if one is available */
-  resumeSnapshot: GenerationResumeSnapshot | undefined
   /** Identity of the in-flight run while one is streaming, or null after it ends */
   resumeState: GenerationResumeState | null
-  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
-  pendingArtifacts: Array<GenerationPendingArtifact>
-  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
-  resultArtifacts: Array<PersistedArtifactRef>
 }
 
 /**
@@ -155,9 +147,9 @@ export function useGenerateVideo<TTransformed = void>(
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<Error | undefined>(undefined)
   const [status, setStatus] = useState<GenerationClientState>('idle')
-  const [resumeSnapshot, setResumeSnapshot] = useState<
-    GenerationResumeSnapshot | undefined
-  >(options.initialResumeSnapshot)
+  const [resumeState, setResumeState] = useState<GenerationResumeState | null>(
+    options.initialResumeSnapshot?.resumeState ?? null,
+  )
 
   const optionsRef = useRef(options)
   optionsRef.current = options
@@ -226,10 +218,8 @@ export function useGenerateVideo<TTransformed = void>(
       onVideoStatusChange: (s: VideoStatusInfo | null) => {
         if (!disposedRef.current) setVideoStatus(s)
       },
-      onResumeSnapshotChange: (
-        snapshot: GenerationResumeSnapshot | undefined,
-      ) => {
-        if (!disposedRef.current) setResumeSnapshot(snapshot)
+      onResumeStateChange: (rs: GenerationResumeState | null) => {
+        if (!disposedRef.current) setResumeState(rs)
       },
     }
 
@@ -298,16 +288,6 @@ export function useGenerateVideo<TTransformed = void>(
     status,
     stop,
     reset,
-    resumeSnapshot,
-    resumeState: resumeSnapshot?.resumeState ?? null,
-    pendingArtifacts:
-      resumeSnapshot?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS,
-    resultArtifacts:
-      resumeSnapshot?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS,
+    resumeState,
   }
 }
-
-// Stable fallbacks so consumers can safely depend on these arrays in effect
-// dependency lists when no snapshot exists.
-const EMPTY_PENDING_ARTIFACTS: Array<GenerationPendingArtifact> = []
-const EMPTY_RESULT_ARTIFACTS: Array<PersistedArtifactRef> = []

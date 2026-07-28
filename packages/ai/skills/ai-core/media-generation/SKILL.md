@@ -594,7 +594,14 @@ export async function POST(req: Request) {
       prompt,
       threadId, // optional link recorded on the job + artifacts
       stream: true,
-      middleware: [withGenerationPersistence(persistence)],
+      middleware: [
+        withGenerationPersistence(persistence, {
+          // Stamp a durable app-origin serve URL (the GET route below) onto
+          // each persisted artifact ref, and rewrite the live result's media to
+          // it. Both live and restored results then render from your origin.
+          artifactUrl: (ref) => `/api/artifacts?id=${ref.artifactId}`,
+        }),
+      ],
     }),
   )
 }
@@ -616,8 +623,13 @@ On the client, the generation hooks mirror chat's two persistence modes:
 `persistence: <adapter>` (client-driven, caches a lightweight snapshot under
 `generation:<id>`) or `persistence: true` + a stable `threadId` (server-driven —
 hydrates the last generation for the thread on mount via the connection's
-`hydrateGeneration` handler, backed by a `reconstructGeneration` GET route).
-Neither mode ever stores the media bytes on the client.
+`hydrateGeneration` handler, backed by a `reconstructGeneration` GET route). The
+hooks are transparent (like `useChat`): a reload repaints `status` / `result` /
+`error`, not a separate `resumeSnapshot`. Neither mode stores media bytes on the
+client — but because the `artifactUrl` above stamps a durable URL onto each ref
+(carried on `result.artifacts`), the restored `result` rebuilds its media from
+those refs and serves from your own origin. Without byte storage, a reload
+restores `status` / `error` and `result` stays `null`.
 
 - Building the R2/D1-backed byte stores for a Cloudflare Worker:
   **ai-persistence/build-cloudflare-artifact-store**.
@@ -631,23 +643,26 @@ Neither mode ever stores the media bytes on the client.
 
 All generation hooks return the same shape:
 
-| Property         | Type                                    | Description                                      |
-| ---------------- | --------------------------------------- | ------------------------------------------------ |
-| `generate`       | `(input) => Promise<void>`              | Trigger generation                               |
-| `result`         | `T \| null`                             | Result (optionally transformed via `onResult`)   |
-| `isLoading`      | `boolean`                               | Whether generation is in progress                |
-| `error`          | `Error \| undefined`                    | Current error                                    |
-| `status`         | `GenerationClientState`                 | `'idle' \| 'generating' \| 'success' \| 'error'` |
-| `stop`           | `() => void`                            | Abort current generation                         |
-| `reset`          | `() => void`                            | Clear state (and any persisted snapshot)         |
-| `resumeSnapshot` | `GenerationResumeSnapshot \| undefined` | Last run's lightweight record (see below)        |
-| `resumeState`    | `GenerationResumeState \| null`         | Identity of the run WHILE it streams; null after |
+| Property      | Type                            | Description                                      |
+| ------------- | ------------------------------- | ------------------------------------------------ |
+| `generate`    | `(input) => Promise<void>`      | Trigger generation                               |
+| `result`      | `T \| null`                     | Result (optionally transformed via `onResult`)   |
+| `isLoading`   | `boolean`                       | Whether generation is in progress                |
+| `error`       | `Error \| undefined`            | Current error                                    |
+| `status`      | `GenerationClientState`         | `'idle' \| 'generating' \| 'success' \| 'error'` |
+| `stop`        | `() => void`                    | Abort current generation                         |
+| `reset`       | `() => void`                    | Clear state (and any persisted snapshot)         |
+| `resumeState` | `GenerationResumeState \| null` | Identity of the run WHILE it streams; null after |
 
-Hooks also accept `persistence` (a browser storage adapter such as
-`localStoragePersistence()`) plus a stable `id`: the client then writes the
-lightweight resume snapshot under `generation:<id>` as the run streams and
-hydrates it back on mount, so `resumeSnapshot` survives a reload (metadata
-only — never media bytes). See `ai-core/client-persistence` for details.
+The hook is **transparent**, mirroring `useChat`: there is no `resumeSnapshot`,
+`pendingArtifacts`, or `resultArtifacts` field. Hooks also accept `persistence`
+(a browser storage adapter such as `localStoragePersistence()` — a bare call, no
+type argument) plus a stable `id`: the client then writes a lightweight snapshot
+under `generation:<id>` as the run streams and hydrates it back on mount,
+repainting the **normal** `status` / `result` / `error` fields so the last run
+survives a reload (metadata only — never media bytes; `result`'s media returns
+only with server byte storage + `artifactUrl`). See `ai-core/client-persistence`
+for details.
 
 Provide either `connection` (streaming SSE transport) or `fetcher`
 (direct async call / server function returning `Response`). Use `onResult`

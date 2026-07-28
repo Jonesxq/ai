@@ -265,7 +265,8 @@
         {
           "label": "Keep Generated Files",
           "to": "persistence/keep-generated-files",
-          "addedAt": "2026-07-28"
+          "addedAt": "2026-07-28",
+          "updatedAt": "2026-07-28"
         },
         {
           "label": "Controls",

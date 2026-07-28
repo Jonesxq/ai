@@ -154,6 +154,30 @@ describe('withGenerationPersistence generation artifacts', () => {
     await expect(blob?.text()).resolves.toBe('output-image')
   })
 
+  it('stamps a durable url on refs and rewrites the live result media (artifactUrl)', async () => {
+    const persistence = memoryPersistence()
+
+    const result = await generateImage({
+      adapter: imageAdapter(),
+      prompt: 'make an image',
+      threadId: 'thread-url',
+      runId: 'run-url',
+      middleware: [
+        withGenerationPersistence(persistence, {
+          artifactUrl: (ref) => `/artifacts/${ref.artifactId}`,
+        }),
+      ],
+    })
+
+    const ref = result.artifacts?.[0]
+    expect(ref).toBeDefined()
+    const expectedUrl = `/artifacts/${ref!.artifactId}`
+    // The ref carries the durable serve URL...
+    expect(ref!.url).toBe(expectedUrl)
+    // ...and the live result's media points at it too (durable everywhere).
+    expect(result.images[0]?.url).toBe(expectedUrl)
+  })
+
   it('retrieveArtifact / retrieveBlob fetch a persisted artifact and its bytes', async () => {
     const persistence = memoryPersistence()
 

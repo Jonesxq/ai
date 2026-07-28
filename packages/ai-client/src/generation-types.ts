@@ -3,7 +3,7 @@ import type {
   PersistedArtifactRef,
   StreamChunk,
 } from '@tanstack/ai/client'
-import type { TranscriptionResponseFormat } from '@tanstack/ai'
+import type { TokenUsage, TranscriptionResponseFormat } from '@tanstack/ai'
 import type { ConnectConnectionAdapter } from './connection-adapters'
 import type { AIDevtoolsClientMetadata } from './devtools'
 import type { ChatStorageAdapter } from './types'
@@ -65,9 +65,36 @@ export type GenerationClientState = 'idle' | 'generating' | 'success' | 'error'
 
 export type GenerationResumeStatus = 'idle' | 'running' | 'complete' | 'error'
 
+/**
+ * Map a persisted resume status to the client's live state machine on restore:
+ * complete → success, error → error, running → generating, idle → idle. A
+ * restored `running` presents as `generating` with `isLoading` false (the client
+ * never auto-tails a restored run).
+ */
+export function clientStateFromResumeStatus(
+  status: GenerationResumeStatus,
+): GenerationClientState {
+  switch (status) {
+    case 'complete':
+      return 'success'
+    case 'error':
+      return 'error'
+    case 'running':
+      return 'generating'
+    case 'idle':
+      return 'idle'
+  }
+}
+
 export interface GenerationResumeState {
   threadId: string
   runId: string
+  /**
+   * Artifact refs observed while the run is still in flight. Non-null only while
+   * a run is streaming (`resumeState` itself is null once it ends); the final
+   * refs move onto `result.artifacts` when the run completes.
+   */
+  pendingArtifacts?: Array<PersistedArtifactRef>
 }
 
 export type GenerationPendingArtifact = PersistedArtifactRef
@@ -78,6 +105,15 @@ export interface GenerationResultSnapshot {
   status?: string
   jobId?: string
   expiresAt?: string
+  /**
+   * The text output of a text activity (a transcription's `text` or a summary's
+   * `summary`). Persisted so a text generation restores its result on reload
+   * (text is small and not bytes). Absent for media activities, whose output
+   * restores from `artifacts`.
+   */
+  text?: string
+  /** Token usage, persisted so a text result that requires it can be rebuilt. */
+  usage?: TokenUsage
   artifacts?: Array<PersistedArtifactRef>
 }
 
@@ -285,6 +321,37 @@ export interface GenerationClientOptions<_TInput, TResult, TOutput = TResult> {
   onResumeSnapshotChange?: (
     snapshot: GenerationResumeSnapshot | undefined,
   ) => void
+  /** @internal Called when the in-flight run identity changes. `null` once no run is in flight. Mirrors the chat client's resume-state callback. */
+  onResumeStateChange?: (resumeState: GenerationResumeState | null) => void
+
+  /**
+   * @internal Rebuild a typed result from a restored snapshot, injected by each
+   * specialized client/hook (which knows the concrete result shape). Called on
+   * mount restore (client store or server hydrate) so `result` repaints as if the
+   * run had just finished, with media resolved to the durable serve URL. Returns
+   * `null` when the snapshot cannot rebuild a result (then `result` stays null;
+   * `status` / `error` / `resumeState` still repaint).
+   */
+  reconstructResult?: (restored: GenerationRestoredResult) => TResult | null
+}
+
+/**
+ * The restorable shape handed to a client's `reconstructResult` mapper: the
+ * result metadata that survived persistence plus the durable artifact refs (each
+ * carrying its serve {@link PersistedArtifactRef.url}). The specialized client
+ * turns this into its own typed result (image `images`, video `url`, text
+ * `text`, ...).
+ */
+export interface GenerationRestoredResult {
+  id?: string
+  model?: string
+  status?: string
+  jobId?: string
+  expiresAt?: string
+  text?: string
+  usage?: TokenUsage
+  activity?: PersistedArtifactRef['source']['activity']
+  artifacts: Array<PersistedArtifactRef>
 }
 
 /**
@@ -627,10 +694,17 @@ export function createGenerationResultSnapshot(
   const model = stringField(value, 'model')
   const status = stringField(value, 'status')
   const jobId = stringField(value, 'jobId')
+  // A transcription's output is `text`; a summary's is `summary`. Capture either
+  // under `text` so a text result restores on reload.
+  const text = stringField(value, 'text') ?? stringField(value, 'summary')
+  const usage = Reflect.get(value, 'usage')
   if (id) snapshot.id = id
   if (model) snapshot.model = model
   if (status) snapshot.status = status
   if (jobId) snapshot.jobId = jobId
+  if (text) snapshot.text = text
+  // Passthrough opaque token-usage metadata (untrusted; not deeply validated).
+  if (isObject(usage)) snapshot.usage = usage as TokenUsage
   const expiresAt = Reflect.get(value, 'expiresAt')
   if (typeof expiresAt === 'string') {
     snapshot.expiresAt = expiresAt
@@ -707,6 +781,7 @@ function createPersistedArtifactRefSnapshot(
   }
 
   const externalUrl = durableUrlField(value, 'externalUrl')
+  const url = serveUrlField(value, 'url')
   const mediaType = persistedArtifactMediaTypeField(source, 'mediaType')
   const jobId = stringField(source, 'jobId')
   const expiresAt = stringField(source, 'expiresAt')
@@ -721,6 +796,7 @@ function createPersistedArtifactRefSnapshot(
     size,
     createdAt,
     ...(externalUrl ? { externalUrl } : {}),
+    ...(url ? { url } : {}),
     source: {
       activity,
       path,
@@ -736,6 +812,31 @@ function createPersistedArtifactRefSnapshot(
 function durableUrlField(value: object, key: string): string | undefined {
   const field = stringField(value, key)
   if (!field || field.length > 2048) return undefined
+  try {
+    const url = new URL(field)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? field
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Validates an app-origin serve URL, which unlike a provider URL is usually a
+ * same-origin path (`/api/.../artifact?id=...`). Accepts an absolute http(s) URL
+ * or a path-absolute same-origin URL (single leading `/`); rejects
+ * protocol-relative (`//host`), `javascript:` / `data:`, and anything else, since
+ * this value is rendered as media `src`.
+ */
+function serveUrlField(value: object, key: string): string | undefined {
+  const field = stringField(value, key)
+  if (!field || field.length > 2048) return undefined
+  // A single leading `/` is a safe same-origin path. Reject protocol-relative
+  // `//host` AND a backslash bypass (`/\host` — the URL parser treats `\` as `/`
+  // for http(s), so it would resolve to a foreign origin as an `<img src>`).
+  if (field.startsWith('/') && !field.startsWith('//') && !field.includes('\\'))
+    return field
   try {
     const url = new URL(field)
     return url.protocol === 'http:' || url.protocol === 'https:'

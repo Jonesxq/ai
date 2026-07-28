@@ -13,7 +13,7 @@ import type {
 
 export type InjectGenerateSpeechOptions<TOutput = TTSResult> = Omit<
   InjectGenerationOptions<SpeechGenerateInput, TTSResult, TOutput>,
-  'onResult'
+  'onResult' | 'reconstructResult'
 > & {
   onResult?: (result: TTSResult) => TOutput | null | void
 }

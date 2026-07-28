@@ -1,18 +1,17 @@
 import { useGeneration } from './use-generation'
+import { reconstructSummarizeResult } from '@tanstack/ai-client'
 import type { StreamChunk, SummarizationResult } from '@tanstack/ai'
 import type {
   AIDevtoolsDisplayOptions,
   ConnectConnectionAdapter,
   GenerationClientState,
   GenerationFetcher,
-  GenerationPendingArtifact,
   GenerationPersistence,
   GenerationResumeSnapshot,
   GenerationResumeState,
   InferGenerationOutputFromReturn,
   SummarizeGenerateInput,
 } from '@tanstack/ai-client'
-import type { PersistedArtifactRef } from '@tanstack/ai/client'
 
 /**
  * Options for the useSummarize hook.
@@ -81,14 +80,8 @@ export interface UseSummarizeReturn<TOutput = SummarizationResult> {
   stop: () => void
   /** Clear result, error, and return to idle */
   reset: () => void
-  /** Lightweight generation resume snapshot, if one is available */
-  resumeSnapshot: GenerationResumeSnapshot | undefined
   /** Identity of the in-flight run while one is streaming, or null after it ends */
   resumeState: GenerationResumeState | null
-  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
-  pendingArtifacts: Array<GenerationPendingArtifact>
-  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
-  resultArtifacts: Array<PersistedArtifactRef>
 }
 
 /**
@@ -140,6 +133,7 @@ export function useSummarize<TTransformed = void>(
   >({
     ...options,
     devtools,
+    reconstructResult: reconstructSummarizeResult,
   })
 
   return generation

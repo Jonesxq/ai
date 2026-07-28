@@ -418,7 +418,7 @@ describe('useGeneration', () => {
   })
 
   describe('persistence', () => {
-    it('hydrates the resume snapshot from storage on mount without starting a run', async () => {
+    it('repaints status from a stored complete snapshot on mount without starting a run', async () => {
       const { adapter, connect } = createRunContextCaptureAdapter(
         createGenerationChunks({ id: '1' }),
       )
@@ -440,15 +440,48 @@ describe('useGeneration', () => {
         }),
       )
 
+      // A completed snapshot repaints the normal `status` field to `success`.
       await waitFor(() => {
-        expect(result.current.resumeSnapshot).toMatchObject({
-          status: 'complete',
-          result: { id: 'result-1' },
-        })
+        expect(result.current.status).toBe('success')
       })
       expect(persistence.getItem).toHaveBeenCalledWith('generation:hydrated')
       expect(connect).not.toHaveBeenCalled()
-      expect(result.current.status).toBe('idle')
+      // The base hook injects no reconstructResult, so `result` stays null.
+      expect(result.current.result).toBeNull()
+      expect(result.current.resumeState).toBeNull()
+    })
+
+    it('repaints resumeState from a stored running snapshot on mount', async () => {
+      const { adapter, connect } = createRunContextCaptureAdapter(
+        createGenerationChunks({ id: '1' }),
+      )
+      const persistence: GenerationPersistence = {
+        getItem: vi.fn(() => ({
+          resumeState: { threadId: 'thread-resume', runId: 'run-resume' },
+          status: 'running' as const,
+        })),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      }
+
+      const { result } = renderHook(() =>
+        useGeneration({
+          id: 'running-hydrate',
+          connection: adapter,
+          persistence: persistence,
+        }),
+      )
+
+      await waitFor(() => {
+        expect(result.current.resumeState).toEqual({
+          threadId: 'thread-resume',
+          runId: 'run-resume',
+        })
+      })
+      // A restored running run presents as `generating` but never auto-tails.
+      expect(result.current.status).toBe('generating')
+      expect(result.current.isLoading).toBe(false)
+      expect(connect).not.toHaveBeenCalled()
     })
 
     it('server-driven (persistence: true) hydrates from the connection by threadId without a local store', async () => {
@@ -473,15 +506,12 @@ describe('useGeneration', () => {
         }),
       )
 
+      // The server snapshot repaints `status` to `success`.
       await waitFor(() => {
-        expect(result.current.resumeSnapshot).toMatchObject({
-          status: 'complete',
-          result: { id: 'server-result' },
-        })
+        expect(result.current.status).toBe('success')
       })
       expect(hydrateGeneration).toHaveBeenCalledWith('thread-server')
       expect(connect).not.toHaveBeenCalled()
-      expect(result.current.status).toBe('idle')
     })
 
     it('generates normally under React StrictMode (dispose → remount replay)', async () => {
@@ -505,7 +535,7 @@ describe('useGeneration', () => {
       })
     })
 
-    it('exposes sanitized artifact refs observed from a streamed result', async () => {
+    it('clears resumeState once a streamed run finishes', async () => {
       const adapter = createMockConnectionAdapter({
         chunks: createReplayVideoChunks(),
       })
@@ -519,10 +549,10 @@ describe('useGeneration', () => {
       })
 
       await waitFor(() => {
-        expect(result.current.resultArtifacts).toEqual([replayedVideoArtifact])
-        expect(result.current.pendingArtifacts).toEqual([replayedVideoArtifact])
-        expect(result.current.resumeSnapshot?.status).toBe('complete')
+        expect(result.current.status).toBe('success')
       })
+      // Once the run ends the in-flight identity is gone.
+      expect(result.current.resumeState).toBeNull()
     })
   })
 })
@@ -609,6 +639,64 @@ describe('useGenerateImage', () => {
 
     expect(typeof result.current.stop).toBe('function')
     expect(typeof result.current.reset).toBe('function')
+  })
+
+  it('restores a completed image result from a durable artifact url', async () => {
+    // useGenerateImage injects `reconstructImageResult`, so a restored complete
+    // snapshot repaints `result` with the durable serve url — as if the run had
+    // just finished.
+    const artifact: PersistedArtifactRef = {
+      role: 'output',
+      artifactId: 'artifact-image-1',
+      threadId: 'thread-img',
+      runId: 'run-img',
+      name: 'image.png',
+      mimeType: 'image/png',
+      size: 2048,
+      createdAt: '2026-07-06T00:00:00.000Z',
+      url: '/api/artifacts/artifact-image-1',
+      source: {
+        activity: 'image',
+        path: 'runs/run-img/image.png',
+        provider: 'test',
+        model: 'test-image',
+        mediaType: 'image',
+      },
+    }
+    const persistence: GenerationPersistence = {
+      getItem: vi.fn(() => ({
+        resumeState: null,
+        status: 'complete' as const,
+        activity: 'image' as const,
+        result: {
+          id: 'img-restored',
+          model: 'test-image',
+          artifacts: [artifact],
+        },
+      })),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    }
+    const adapter = createMockConnectionAdapter()
+
+    const { result } = renderHook(() =>
+      useGenerateImage({
+        id: 'img-hydrate',
+        connection: adapter,
+        persistence: persistence,
+      }),
+    )
+
+    await waitFor(() => {
+      expect(result.current.status).toBe('success')
+    })
+    expect(result.current.result).toEqual({
+      id: 'img-restored',
+      model: 'test-image',
+      images: [{ url: '/api/artifacts/artifact-image-1' }],
+      artifacts: [artifact],
+    })
+    expect(result.current.resumeState).toBeNull()
   })
 })
 
@@ -958,8 +1046,7 @@ describe('useGenerateVideo', () => {
     expect(persistence.getItem).not.toHaveBeenCalled()
     expect(result.current.isLoading).toBe(false)
     expect(result.current.status).toBe('idle')
-    // The persisted snapshot remains exposed as read-only state.
-    expect(result.current.resumeSnapshot).toEqual(videoResumeSnapshot)
+    // The seeded in-flight identity is exposed as read-only `resumeState`.
     expect(result.current.resumeState).toEqual(videoResumeSnapshot.resumeState)
   })
 })

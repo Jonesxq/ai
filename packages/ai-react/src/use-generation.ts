@@ -8,13 +8,12 @@ import type {
   GenerationClientOptions,
   GenerationClientState,
   GenerationFetcher,
-  GenerationPendingArtifact,
   GenerationPersistence,
+  GenerationRestoredResult,
   GenerationResumeSnapshot,
   GenerationResumeState,
   InferGenerationOutputFromReturn,
 } from '@tanstack/ai-client'
-import type { PersistedArtifactRef } from '@tanstack/ai/client'
 
 /**
  * Options for the useGeneration hook.
@@ -65,6 +64,12 @@ export interface UseGenerationOptions<TInput, TResult, TOutput = TResult> {
   onProgress?: (progress: number, message?: string) => void
   /** Callback for each stream chunk (connect-based adapter mode only) */
   onChunk?: (chunk: StreamChunk) => void
+  /**
+   * @internal Rebuild a typed result from a restored snapshot, injected by each
+   * specialized hook (image / audio / transcription / summarize). Forwarded to
+   * the client so a client-store / server-hydrate restore repaints `result`.
+   */
+  reconstructResult?: (restored: GenerationRestoredResult) => TResult | null
 }
 
 /**
@@ -91,14 +96,8 @@ export interface UseGenerationReturn<
   stop: () => void
   /** Clear result, error, and return to idle */
   reset: () => void
-  /** Lightweight generation state snapshot, if one is available */
-  resumeSnapshot: GenerationResumeSnapshot | undefined
   /** Identity of the in-flight run while one is streaming, or null after it ends */
   resumeState: GenerationResumeState | null
-  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
-  pendingArtifacts: Array<GenerationPendingArtifact>
-  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
-  resultArtifacts: Array<PersistedArtifactRef>
 }
 
 /**
@@ -146,9 +145,9 @@ export function useGeneration<
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<Error | undefined>(undefined)
   const [status, setStatus] = useState<GenerationClientState>('idle')
-  const [resumeSnapshot, setResumeSnapshot] = useState<
-    GenerationResumeSnapshot | undefined
-  >(options.initialResumeSnapshot)
+  const [resumeState, setResumeState] = useState<GenerationResumeState | null>(
+    options.initialResumeSnapshot?.resumeState ?? null,
+  )
 
   const optionsRef = useRef(options)
   optionsRef.current = options
@@ -169,6 +168,9 @@ export function useGeneration<
       ...(opts.initialResumeSnapshot !== undefined && {
         initialResumeSnapshot: opts.initialResumeSnapshot,
       }),
+      ...(opts.reconstructResult
+        ? { reconstructResult: opts.reconstructResult }
+        : {}),
       devtoolsBridgeFactory: createGenerationDevtoolsBridge,
       devtools: {
         hookName: 'useGeneration',
@@ -202,8 +204,8 @@ export function useGeneration<
       onStatusChange: (s) => {
         if (!disposedRef.current) setStatus(s)
       },
-      onResumeSnapshotChange: (snapshot) => {
-        if (!disposedRef.current) setResumeSnapshot(snapshot)
+      onResumeStateChange: (rs) => {
+        if (!disposedRef.current) setResumeState(rs)
       },
     }
 
@@ -270,16 +272,6 @@ export function useGeneration<
     status,
     stop,
     reset,
-    resumeSnapshot,
-    resumeState: resumeSnapshot?.resumeState ?? null,
-    pendingArtifacts:
-      resumeSnapshot?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS,
-    resultArtifacts:
-      resumeSnapshot?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS,
+    resumeState,
   }
 }
-
-// Stable fallbacks so consumers can safely depend on these arrays in effect
-// dependency lists when no snapshot exists.
-const EMPTY_PENDING_ARTIFACTS: Array<GenerationPendingArtifact> = []
-const EMPTY_RESULT_ARTIFACTS: Array<PersistedArtifactRef> = []

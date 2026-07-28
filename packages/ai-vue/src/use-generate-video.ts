@@ -14,7 +14,6 @@ import type {
   ConnectConnectionAdapter,
   GenerationClientState,
   GenerationFetcher,
-  GenerationPendingArtifact,
   GenerationPersistence,
   GenerationResumeSnapshot,
   GenerationResumeState,
@@ -23,7 +22,6 @@ import type {
   VideoGenerateResult,
   VideoStatusInfo,
 } from '@tanstack/ai-client'
-import type { PersistedArtifactRef } from '@tanstack/ai/client'
 import type { DeepReadonly, ShallowRef } from 'vue'
 
 /**
@@ -101,14 +99,8 @@ export interface UseGenerateVideoReturn<TOutput = VideoGenerateResult> {
   stop: () => void
   /** Clear all state and return to idle */
   reset: () => void
-  /** Lightweight generation resume snapshot, if one is available */
-  resumeSnapshot: DeepReadonly<ShallowRef<GenerationResumeSnapshot | undefined>>
   /** Identity of the in-flight run while one is streaming, or null after it ends */
   resumeState: DeepReadonly<ShallowRef<GenerationResumeState | null>>
-  /** Pending persisted artifact refs observed mid-run. Currently always empty: nothing emits `generation:artifacts` until the server-side artifact pipeline ships in a follow-up */
-  pendingArtifacts: DeepReadonly<ShallowRef<Array<GenerationPendingArtifact>>>
-  /** Persisted artifact refs from the final result. Currently always empty: results carry no artifacts until the server-side artifact pipeline ships in a follow-up */
-  resultArtifacts: DeepReadonly<ShallowRef<Array<PersistedArtifactRef>>>
 }
 
 /**
@@ -165,31 +157,10 @@ export function useGenerateVideo<TTransformed = void>(
   const isLoading = shallowRef(false)
   const error = shallowRef<Error | undefined>(undefined)
   const status = shallowRef<GenerationClientState>('idle')
-  const resumeSnapshot = shallowRef<GenerationResumeSnapshot | undefined>(
-    options.initialResumeSnapshot,
-  )
   const resumeState = shallowRef<GenerationResumeState | null>(
     options.initialResumeSnapshot?.resumeState ?? null,
   )
-  const pendingArtifacts = shallowRef<Array<GenerationPendingArtifact>>(
-    options.initialResumeSnapshot?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS,
-  )
-  const resultArtifacts = shallowRef<Array<PersistedArtifactRef>>(
-    options.initialResumeSnapshot?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS,
-  )
   let disposed = false
-
-  const setResumeSnapshotState = (
-    snapshot: GenerationResumeSnapshot | undefined,
-  ) => {
-    if (disposed) return
-    resumeSnapshot.value = snapshot
-    resumeState.value = snapshot?.resumeState ?? null
-    pendingArtifacts.value =
-      snapshot?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS
-    resultArtifacts.value =
-      snapshot?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS
-  }
 
   // Conditional spread on `body`: `VideoGenerationClientOptions.body` is a
   // strict optional and under EOPT we must omit the key when absent rather
@@ -256,7 +227,10 @@ export function useGenerateVideo<TTransformed = void>(
       if (disposed) return
       videoStatus.value = s
     },
-    onResumeSnapshotChange: setResumeSnapshotState,
+    onResumeStateChange: (rs: GenerationResumeState | null) => {
+      if (disposed) return
+      resumeState.value = rs
+    },
   }
 
   let client: VideoGenerationClient<TOutput>
@@ -327,14 +301,6 @@ export function useGenerateVideo<TTransformed = void>(
     status: readonly(status),
     stop,
     reset,
-    resumeSnapshot: readonly(resumeSnapshot),
     resumeState: readonly(resumeState),
-    pendingArtifacts: readonly(pendingArtifacts),
-    resultArtifacts: readonly(resultArtifacts),
   }
 }
-
-// Shared fallbacks so a snapshot change that leaves the artifact lists empty
-// reassigns the same reference and doesn't trigger dependent watchers.
-const EMPTY_PENDING_ARTIFACTS: Array<GenerationPendingArtifact> = []
-const EMPTY_RESULT_ARTIFACTS: Array<PersistedArtifactRef> = []

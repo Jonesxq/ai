@@ -7,7 +7,11 @@ import { createSummarize } from '../src/create-summarize.svelte'
 import { createGenerateVideo } from '../src/create-generate-video.svelte'
 import { createMockConnectionAdapter } from './test-utils'
 import { EventType, type StreamChunk } from '@tanstack/ai'
-import type { TTSResult, TranscriptionResult } from '@tanstack/ai'
+import type {
+  PersistedArtifactRef,
+  TTSResult,
+  TranscriptionResult,
+} from '@tanstack/ai'
 import type {
   ConnectConnectionAdapter,
   GenerationResumeSnapshot,
@@ -274,7 +278,7 @@ describe('createGeneration', () => {
   })
 
   describe('resume snapshot persistence', () => {
-    it('hydrates a persisted snapshot into resumeSnapshot on creation', async () => {
+    it('repaints resumeState from a stored running snapshot on creation', async () => {
       const persistence = createMapPersistence({
         'generation:hydrate-me': {
           schemaVersion: 1,
@@ -290,28 +294,51 @@ describe('createGeneration', () => {
       })
 
       // Hydration is async — the storage read is awaited off the constructor.
-      expect(gen.resumeSnapshot).toBeUndefined()
+      expect(gen.resumeState).toBeNull()
       await flushAsync()
 
       expect(persistence.getItem).toHaveBeenCalledTimes(1)
       expect(persistence.getItem).toHaveBeenCalledWith('generation:hydrate-me')
-      expect(gen.resumeSnapshot).toEqual({
-        schemaVersion: 1,
-        resumeState: { threadId: 'thread-stored', runId: 'run-stored' },
-        status: 'running',
-      })
+      // A restored running run presents as `generating` but never auto-tails.
       expect(gen.resumeState).toEqual({
         threadId: 'thread-stored',
         runId: 'run-stored',
       })
+      expect(gen.status).toBe('generating')
+      expect(gen.isLoading).toBe(false)
     })
 
-    it('clears resumeSnapshot and removes the persisted record on reset', async () => {
+    it('repaints status from a stored complete snapshot on creation without starting a run', async () => {
       const persistence = createMapPersistence({
-        'generation:reset-me': {
+        'generation:complete-me': {
           schemaVersion: 1,
           resumeState: null,
           status: 'complete',
+          result: { id: 'result-1', model: 'image-model' },
+        },
+      })
+
+      const gen = createGeneration({
+        id: 'complete-me',
+        connection: createMockConnectionAdapter(),
+        persistence,
+      })
+
+      await flushAsync()
+
+      // A completed snapshot repaints the normal `status` field to `success`.
+      expect(gen.status).toBe('success')
+      // The base function injects no reconstructResult, so `result` stays null.
+      expect(gen.result).toBeNull()
+      expect(gen.resumeState).toBeNull()
+    })
+
+    it('clears resumeState and removes the persisted record on reset', async () => {
+      const persistence = createMapPersistence({
+        'generation:reset-me': {
+          schemaVersion: 1,
+          resumeState: { threadId: 'thread-stored', runId: 'run-stored' },
+          status: 'running',
         },
       })
 
@@ -322,11 +349,13 @@ describe('createGeneration', () => {
       })
 
       await flushAsync()
-      expect(gen.resumeSnapshot).toBeDefined()
+      expect(gen.resumeState).toEqual({
+        threadId: 'thread-stored',
+        runId: 'run-stored',
+      })
 
       gen.reset()
 
-      expect(gen.resumeSnapshot).toBeUndefined()
       expect(gen.resumeState).toBeNull()
 
       await flushAsync()
@@ -449,6 +478,62 @@ describe('createGenerateImage', () => {
 
     expect(typeof gen.stop).toBe('function')
     expect(typeof gen.reset).toBe('function')
+  })
+
+  it('restores a completed image result from a durable artifact url', async () => {
+    // createGenerateImage injects `reconstructImageResult`, so a restored
+    // complete snapshot repaints `result` with the durable serve url — as if the
+    // run had just finished.
+    const artifact: PersistedArtifactRef = {
+      role: 'output',
+      artifactId: 'artifact-image-1',
+      threadId: 'thread-img',
+      runId: 'run-img',
+      name: 'image.png',
+      mimeType: 'image/png',
+      size: 2048,
+      createdAt: '2026-07-06T00:00:00.000Z',
+      url: '/api/artifacts/artifact-image-1',
+      source: {
+        activity: 'image',
+        path: 'runs/run-img/image.png',
+        provider: 'test',
+        model: 'test-image',
+        mediaType: 'image',
+      },
+    }
+    const persistence = createMapPersistence({
+      'generation:img-hydrate': {
+        schemaVersion: 1,
+        resumeState: null,
+        status: 'complete',
+        activity: 'image',
+        result: {
+          id: 'img-restored',
+          model: 'test-image',
+          artifacts: [artifact],
+        },
+      },
+    })
+
+    const gen = createGenerateImage({
+      id: 'img-hydrate',
+      connection: createMockConnectionAdapter(),
+      persistence,
+    })
+
+    await flushAsync()
+
+    // The completed snapshot repaints `status` and rebuilds `result` from the
+    // durable serve url.
+    expect(gen.status).toBe('success')
+    expect(gen.result).toEqual({
+      id: 'img-restored',
+      model: 'test-image',
+      images: [{ url: '/api/artifacts/artifact-image-1' }],
+      artifacts: [artifact],
+    })
+    expect(gen.resumeState).toBeNull()
   })
 })
 
@@ -822,8 +907,7 @@ describe('createGenerateVideo', () => {
     expect(getItem).not.toHaveBeenCalled()
     expect(gen.isLoading).toBe(false)
     expect(gen.status).toBe('idle')
-    // The persisted snapshot remains exposed as read-only state.
-    expect(gen.resumeSnapshot).toEqual(videoResumeSnapshot)
+    // The seeded in-flight identity is exposed as read-only `resumeState`.
     expect(gen.resumeState).toEqual(videoResumeSnapshot.resumeState)
   })
 

@@ -1,5 +1,6 @@
 import {
   GENERATION_EVENTS,
+  clientStateFromResumeStatus,
   createGenerationResultSnapshot,
   parseGenerationResumeSnapshot,
   updateGenerationResumeSnapshot,
@@ -23,6 +24,7 @@ import type {
   GenerationFetcher,
   GenerationResumeSnapshot,
   GenerationPersistence,
+  GenerationResumeState,
   VideoGenerateInput,
   VideoGenerateResult,
   VideoGenerationClientOptions,
@@ -52,6 +54,9 @@ interface VideoCallbacks<TOutput> {
   onVideoStatusChange?: ((status: VideoStatusInfo | null) => void) | undefined
   onResumeSnapshotChange?:
     | ((snapshot: GenerationResumeSnapshot | undefined) => void)
+    | undefined
+  onResumeStateChange?:
+    | ((resumeState: GenerationResumeState | null) => void)
     | undefined
 }
 
@@ -166,6 +171,7 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
       onJobIdChange: options.onJobIdChange,
       onVideoStatusChange: options.onVideoStatusChange,
       onResumeSnapshotChange: options.onResumeSnapshotChange,
+      onResumeStateChange: options.onResumeStateChange,
     }
 
     this.devtoolsMetadata = this.createDevtoolsMetadata(options.devtools)
@@ -417,7 +423,7 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
         resumeState: null,
         status: 'idle',
       }
-      this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
+      this.notifyResumeSnapshotChanged()
       void this.persistResumeSnapshot(this.resumeSnapshot)
     }
   }
@@ -672,8 +678,76 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
       this.resumeSnapshot,
       chunk,
     )
-    this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
+    this.notifyResumeSnapshotChanged()
     void this.persistResumeSnapshot(this.resumeSnapshot)
+  }
+
+  /** Notify the internal snapshot listener AND emit the public resume state. */
+  private notifyResumeSnapshotChanged(): void {
+    this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
+    this.emitResumeState()
+  }
+
+  /** Derive the public `resumeState` from the internal snapshot. */
+  private emitResumeState(): void {
+    const snapshot = this.resumeSnapshot
+    const state = snapshot?.resumeState
+    const resumeState: GenerationResumeState | null = state
+      ? {
+          ...state,
+          ...(snapshot?.pendingArtifacts && snapshot.pendingArtifacts.length > 0
+            ? { pendingArtifacts: [...snapshot.pendingArtifacts] }
+            : {}),
+        }
+      : null
+    this.callbacksRef.onResumeStateChange?.(resumeState)
+  }
+
+  /**
+   * Repaint the normal fields from a restored snapshot so a reload presents the
+   * video in `result` / `status` / `error` / `jobId`, never a snapshot object.
+   * `isLoading` stays false (no auto-tail). Not re-persisted (it came from
+   * storage / the server).
+   */
+  private repaintFromSnapshot(snapshot: GenerationResumeSnapshot): void {
+    this.resumeSnapshot = snapshot
+    this.notifyResumeSnapshotChanged()
+    this.setStatus(clientStateFromResumeStatus(snapshot.status))
+    this.setError(
+      snapshot.error
+        ? Object.assign(
+            new Error(snapshot.error.message),
+            snapshot.error.code ? { code: snapshot.error.code } : {},
+          )
+        : undefined,
+    )
+    if (snapshot.result?.jobId) this.setJobId(snapshot.result.jobId)
+    const restored = this.reconstructVideoResult(snapshot)
+    if (restored !== null) this.setResult(restored)
+  }
+
+  /**
+   * Rebuild a `VideoGenerateResult` from a restored snapshot: the video's bytes
+   * are served from the durable artifact URL, so the restored result renders
+   * from your own origin. Returns `null` when there is no durable video artifact.
+   */
+  private reconstructVideoResult(
+    snapshot: GenerationResumeSnapshot,
+  ): VideoGenerateResult | null {
+    const result = snapshot.result
+    const artifacts = result?.artifacts ?? []
+    const output = artifacts.find(
+      (a) =>
+        a.role === 'output' && a.source.mediaType === 'video' && a.url != null,
+    )
+    if (!output?.url) return null
+    return {
+      jobId: result?.jobId ?? '',
+      status: 'completed',
+      url: output.url,
+      ...(result?.expiresAt ? { expiresAt: new Date(result.expiresAt) } : {}),
+      artifacts,
+    }
   }
 
   /**
@@ -699,7 +773,7 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
           ? { result: { ...previous.result } }
           : {}),
     }
-    this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
+    this.notifyResumeSnapshotChanged()
     void this.persistResumeSnapshot(this.resumeSnapshot)
   }
 
@@ -724,14 +798,14 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
       ...(previous?.result ? { result: { ...previous.result } } : {}),
       error: { message: error.message },
     }
-    this.callbacksRef.onResumeSnapshotChange?.(this.resumeSnapshot)
+    this.notifyResumeSnapshotChanged()
     void this.persistResumeSnapshot(this.resumeSnapshot)
   }
 
   private clearResumeSnapshot(): void {
     this.resumeSnapshot = undefined
     this.queuedSnapshotSignature = undefined
-    this.callbacksRef.onResumeSnapshotChange?.(undefined)
+    this.notifyResumeSnapshotChanged()
     if (!this.resumePersistence) {
       return
     }
@@ -777,8 +851,7 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
     // Live state wins: adopt the stored snapshot only if nothing has been
     // observed since construction.
     if (this.resumeSnapshot || this.isLoading || this.status !== 'idle') return
-    this.resumeSnapshot = snapshot
-    this.callbacksRef.onResumeSnapshotChange?.(snapshot)
+    this.repaintFromSnapshot(snapshot)
   }
 
   /**
@@ -807,8 +880,7 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
       // Re-check: a send may have started while the fetch was in flight.
       if (this.resumeSnapshot || this.isLoading || this.status !== 'idle')
         return
-      this.resumeSnapshot = snapshot
-      this.callbacksRef.onResumeSnapshotChange?.(snapshot)
+      this.repaintFromSnapshot(snapshot)
     })()
   }
 

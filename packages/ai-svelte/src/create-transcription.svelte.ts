@@ -1,4 +1,5 @@
 import { createGeneration } from './create-generation.svelte'
+import { reconstructTranscriptionResult } from '@tanstack/ai-client'
 import type {
   CreateGenerationOptions,
   CreateGenerationReturn,
@@ -129,6 +130,7 @@ export function createTranscription<TTransformed = void>(
   >({
     ...options,
     devtools,
+    reconstructResult: reconstructTranscriptionResult,
   })
 
   return {
@@ -149,17 +151,8 @@ export function createTranscription<TTransformed = void>(
     reset: gen.reset,
     updateBody: gen.updateBody,
     dispose: gen.dispose,
-    get resumeSnapshot() {
-      return gen.resumeSnapshot
-    },
     get resumeState() {
       return gen.resumeState
-    },
-    get pendingArtifacts() {
-      return gen.pendingArtifacts
-    },
-    get resultArtifacts() {
-      return gen.resultArtifacts
     },
   }
 }

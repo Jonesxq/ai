@@ -1,4 +1,5 @@
 import { useGeneration } from './use-generation'
+import { reconstructTranscriptionResult } from '@tanstack/ai-client'
 import type {
   UseGenerationOptions,
   UseGenerationReturn,
@@ -127,7 +128,7 @@ export function useTranscription<TTransformed = void>(
     TranscriptionGenerateInput,
     TranscriptionResult,
     TTransformed
-  >({ ...options, devtools })
+  >({ ...options, devtools, reconstructResult: reconstructTranscriptionResult })
 
   return generation
 }

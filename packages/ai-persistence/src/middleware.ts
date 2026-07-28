@@ -50,6 +50,15 @@ export interface WithPersistenceOptions {
     | Array<GenerationArtifactDescriptor | PersistedArtifactRef>
     | Promise<Array<GenerationArtifactDescriptor | PersistedArtifactRef>>
   nameArtifact?: (input: GenerationArtifactNameInput) => string
+  /**
+   * Map a freshly-persisted artifact ref to the durable app-origin URL that
+   * serves its bytes (your `GET` route around `retrieveArtifact` /
+   * `retrieveBlob`). The returned URL is stamped onto `ref.url` and written into
+   * the result's media field, so both the live and the restored result render
+   * durable media from your own origin instead of the provider's expiring link.
+   * Return `undefined` to leave a ref without a durable URL.
+   */
+  artifactUrl?: (ref: PersistedArtifactRef) => string | undefined
 }
 
 export interface GenerationArtifactDescriptor {
@@ -766,7 +775,53 @@ async function persistGenerationArtifacts(
     })
   }
 
+  // Stamp the durable app-origin serve URL onto every ref that lacks one, so
+  // clients render + restore media from your own origin, not the provider link.
+  if (opts?.artifactUrl) {
+    for (let i = 0; i < refs.length; i++) {
+      const ref = refs[i]
+      if (ref && !ref.url) {
+        const url = opts.artifactUrl(ref)
+        if (url) refs[i] = { ...ref, url }
+      }
+    }
+  }
+
   return refs
+}
+
+/**
+ * Rewrite the live result's media fields to each output ref's durable serve URL
+ * (`ref.url`), so the live result matches what a reload restores. Keyed off the
+ * ref's `source.path`: `images.<i>` → `result.images[i].url`, `video` →
+ * `result.url`, `audio` (object) → `result.audio.url`. tts (a base64 string) and
+ * transcription (json) have no media-URL field, so they are left as-is; their
+ * durable bytes are reachable via `result.artifacts`. A no-op when no ref has a
+ * `url`.
+ */
+function applyDurableMediaUrls(
+  result: Record<string, unknown>,
+  refs: Array<PersistedArtifactRef>,
+): Record<string, unknown> {
+  let next = result
+  for (const ref of refs) {
+    if (ref.role !== 'output' || !ref.url) continue
+    const path = ref.source.path
+    if (path.startsWith('images.')) {
+      const index = Number(path.slice('images.'.length))
+      const images = next.images
+      if (Array.isArray(images) && objectValue(images[index])) {
+        const cloned = [...images]
+        cloned[index] = { ...objectValue(images[index]), url: ref.url }
+        next = { ...next, images: cloned }
+      }
+    } else if (path === 'video') {
+      next = { ...next, url: ref.url }
+    } else if (path === 'audio' && objectValue(next.audio)) {
+      next = { ...next, audio: { ...objectValue(next.audio), url: ref.url } }
+    }
+  }
+  return next
 }
 
 // ---------------------------------------------------------------------------
@@ -1206,11 +1261,15 @@ export function withGenerationPersistence(
             result,
           )
           if (refs.length === 0) return undefined
-          const existing = objectValue(result)?.artifacts
-          return {
-            ...(objectValue(result) ?? {}),
+          const base = objectValue(result) ?? {}
+          const existing = base.artifacts
+          const withArtifacts = {
+            ...base,
             artifacts: [...(Array.isArray(existing) ? existing : []), ...refs],
           }
+          // Point the live result's media at the durable serve URL (when
+          // `artifactUrl` stamped one), so live and restored results match.
+          return applyDurableMediaUrls(withArtifacts, refs)
         })
       }
 

@@ -1,4 +1,5 @@
 import { useGeneration } from './use-generation'
+import { reconstructImageResult } from '@tanstack/ai-client'
 import type {
   UseGenerationOptions,
   UseGenerationReturn,
@@ -125,6 +126,7 @@ export function useGenerateImage<TTransformed = void>(
   >({
     ...options,
     devtools,
+    reconstructResult: reconstructImageResult,
   })
 
   return generation

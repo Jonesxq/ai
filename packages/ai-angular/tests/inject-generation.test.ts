@@ -7,7 +7,8 @@ import {
 import { describe, expect, it, vi } from 'vitest'
 import { injectGeneration } from '../src/inject-generation'
 import { injectGenerateVideo } from '../src/inject-generate-video'
-import type { StreamChunk } from '@tanstack/ai'
+import { injectGenerateImage } from '../src/inject-generate-image'
+import type { PersistedArtifactRef, StreamChunk } from '@tanstack/ai'
 import type {
   ConnectConnectionAdapter,
   GenerationPersistence,
@@ -50,6 +51,22 @@ function renderInjectGenerateVideo(options: any) {
   @Component({ standalone: true, template: '' })
   class Host {
     gen = injectGenerateVideo(options)
+  }
+  const fixture = TestBed.createComponent(Host)
+  fixture.detectChanges()
+  return {
+    get result() {
+      return fixture.componentInstance.gen
+    },
+    flush: () => fixture.detectChanges(),
+    destroy: () => fixture.destroy(),
+  }
+}
+
+function renderInjectGenerateImage(options: any) {
+  @Component({ standalone: true, template: '' })
+  class Host {
+    gen = injectGenerateImage(options)
   }
   const fixture = TestBed.createComponent(Host)
   fixture.detectChanges()
@@ -206,18 +223,17 @@ describe('injectGeneration', () => {
     expect(getItem).toHaveBeenCalledWith('generation:hydrate-me')
     // Hydration only surfaces state; it never restarts the run.
     expect(connect).not.toHaveBeenCalled()
-    expect(result.resumeSnapshot()).toEqual({
-      schemaVersion: 1,
-      resumeState: { threadId: 'thread-stored', runId: 'run-stored' },
-      status: 'running',
-    })
+    // A restored running run repaints `status` to `generating` but never
+    // auto-tails, and its in-flight identity is exposed as `resumeState`.
+    expect(result.status()).toBe('generating')
+    expect(result.isLoading()).toBe(false)
     expect(result.resumeState()).toEqual({
       threadId: 'thread-stored',
       runId: 'run-stored',
     })
   })
 
-  it('clears the snapshot and removes the persisted record on reset', async () => {
+  it('clears resume state and removes the persisted record on reset', async () => {
     const snapshot: GenerationResumeSnapshot = {
       resumeState: { threadId: 'thread-reset', runId: 'run-reset' },
       status: 'running',
@@ -233,15 +249,13 @@ describe('injectGeneration', () => {
       initialResumeSnapshot: snapshot,
     })
 
-    expect(result.resumeSnapshot()).toEqual(snapshot)
+    // The seeded in-flight identity is exposed as read-only `resumeState`.
+    expect(result.resumeState()).toEqual(snapshot.resumeState)
 
     result.reset()
     await flushPromises()
 
-    expect(result.resumeSnapshot()).toBeUndefined()
     expect(result.resumeState()).toBeNull()
-    expect(result.pendingArtifacts()).toEqual([])
-    expect(result.resultArtifacts()).toEqual([])
     expect(removeItem).toHaveBeenCalledWith('generation:reset-me')
     expect(store.has('generation:reset-me')).toBe(false)
   })
@@ -265,8 +279,7 @@ describe('injectGenerateVideo', () => {
     expect(getItem).not.toHaveBeenCalled()
     expect(result.isLoading()).toBe(false)
     expect(result.status()).toBe('idle')
-    // The persisted snapshot remains exposed as read-only state.
-    expect(result.resumeSnapshot()).toEqual(videoResumeSnapshot)
+    // The seeded in-flight identity is exposed as read-only `resumeState`.
     expect(result.resumeState()).toEqual(videoResumeSnapshot.resumeState)
   })
 
@@ -286,17 +299,76 @@ describe('injectGenerateVideo', () => {
     expect(getItem).toHaveBeenCalledTimes(1)
     expect(getItem).toHaveBeenCalledWith('generation:video-hydrate')
     expect(connect).not.toHaveBeenCalled()
-    expect(result.resumeSnapshot()).toEqual({
-      schemaVersion: 1,
-      ...videoResumeSnapshot,
-    })
+    // A restored running run repaints `status` to `generating` and exposes its
+    // in-flight identity as `resumeState`, but never auto-tails.
+    expect(result.status()).toBe('generating')
+    expect(result.isLoading()).toBe(false)
+    expect(result.resumeState()).toEqual(videoResumeSnapshot.resumeState)
 
     result.reset()
     await flushPromises()
 
-    expect(result.resumeSnapshot()).toBeUndefined()
     expect(result.resumeState()).toBeNull()
     expect(removeItem).toHaveBeenCalledWith('generation:video-hydrate')
     expect(store.has('generation:video-hydrate')).toBe(false)
+  })
+})
+
+describe('injectGenerateImage', () => {
+  it('restores a completed image result from a durable artifact url', async () => {
+    // injectGenerateImage injects `reconstructImageResult`, so a restored
+    // complete snapshot repaints `result` with the durable serve url — as if the
+    // run had just finished.
+    const artifact: PersistedArtifactRef = {
+      role: 'output',
+      artifactId: 'artifact-image-1',
+      threadId: 'thread-img',
+      runId: 'run-img',
+      name: 'image.png',
+      mimeType: 'image/png',
+      size: 2048,
+      createdAt: '2026-07-06T00:00:00.000Z',
+      url: '/api/artifacts/artifact-image-1',
+      source: {
+        activity: 'image',
+        path: 'runs/run-img/image.png',
+        provider: 'test',
+        model: 'test-image',
+        mediaType: 'image',
+      },
+    }
+    const { adapter, connect } = createRunContextCaptureAdapter([])
+    const { persistence, getItem } = createMapPersistence({
+      'generation:img-hydrate': {
+        resumeState: null,
+        status: 'complete',
+        activity: 'image',
+        result: {
+          id: 'img-restored',
+          model: 'test-image',
+          artifacts: [artifact],
+        },
+      },
+    })
+    const { result } = renderInjectGenerateImage({
+      id: 'img-hydrate',
+      connection: adapter,
+      persistence,
+    })
+
+    await flushPromises()
+
+    expect(getItem).toHaveBeenCalledWith('generation:img-hydrate')
+
+    // A completed snapshot repaints the normal `status` field to `success`.
+    expect(result.status()).toBe('success')
+    expect(connect).not.toHaveBeenCalled()
+    expect(result.result()).toEqual({
+      id: 'img-restored',
+      model: 'test-image',
+      images: [{ url: '/api/artifacts/artifact-image-1' }],
+      artifacts: [artifact],
+    })
+    expect(result.resumeState()).toBeNull()
   })
 })
