@@ -64,3 +64,20 @@ export type { ResolveCoordinator } from './worker'
 // The durable run-log + the Web Crypto bearer helper (for direct composition).
 export { DurableObjectRunEventLog } from './run-log-do'
 export { timingSafeBearerEqualWeb } from './web-crypto'
+
+// The run event-log vocabulary this package owns, for apps bringing their own
+// backend. `DurableObjectRunEventLog` (above) is this log's DO-storage-backed
+// mirror; `InMemoryRunEventLog` is the single-process reference implementation.
+// NOTE: the local `isTerminalRunStatus` is deliberately NOT exported — core
+// `@tanstack/ai` ships a same-signature helper with a DIFFERENT terminal set,
+// so an accidental swap would be invisible to the type checker.
+export { InMemoryRunEventLog } from './run-log'
+export type {
+  RunEventLog,
+  RunRecord,
+  RunEvent,
+  RunStatus,
+  TerminalRunStatus,
+  RunError,
+  RunEventLogReadOptions,
+} from './run-log'

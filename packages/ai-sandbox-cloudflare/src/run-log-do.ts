@@ -19,7 +19,7 @@
  *
  * NOTE: Workers-runtime code — compiles against `@cloudflare/workers-types`.
  */
-import { isTerminalRunStatus } from '@tanstack/ai-sandbox'
+import { isTerminalRunStatus } from './run-log'
 import type {
   RunError,
   RunEvent,
@@ -27,7 +27,7 @@ import type {
   RunEventLogReadOptions,
   RunRecord,
   TerminalRunStatus,
-} from '@tanstack/ai-sandbox'
+} from './run-log'
 import type { StreamChunk } from '@tanstack/ai'
 
 /** How long a post-eviction reader waits before re-polling storage (ms). */
