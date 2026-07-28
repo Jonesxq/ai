@@ -253,8 +253,10 @@ export function useGeneration<
     reset,
     resumeSnapshot,
     resumeState: resumeSnapshot?.resumeState ?? null,
-    pendingArtifacts: resumeSnapshot?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS,
-    resultArtifacts: resumeSnapshot?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS,
+    pendingArtifacts:
+      resumeSnapshot?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS,
+    resultArtifacts:
+      resumeSnapshot?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS,
   }
 }
 

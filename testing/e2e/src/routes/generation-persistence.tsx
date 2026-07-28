@@ -42,9 +42,7 @@ function GenerationPersistencePage() {
       <button
         data-testid="generate-button"
         disabled={image.isLoading}
-        onClick={() =>
-          void image.generate({ prompt: 'a lighthouse at dusk' })
-        }
+        onClick={() => void image.generate({ prompt: 'a lighthouse at dusk' })}
       >
         Generate
       </button>
@@ -69,7 +67,8 @@ function GenerationPersistencePage() {
           data-testid="generated-image"
           alt="generated"
           src={
-            img.url ?? (img.b64Json ? `data:image/png;base64,${img.b64Json}` : '')
+            img.url ??
+            (img.b64Json ? `data:image/png;base64,${img.b64Json}` : '')
           }
         />
       ))}

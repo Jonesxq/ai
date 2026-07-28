@@ -250,7 +250,9 @@ export interface GenerationClientOptions<_TInput, TResult, TOutput = TResult> {
   /** @internal Called when generation status changes */
   onStatusChange?: (status: GenerationClientState) => void
   /** @internal Called when lightweight resume snapshot changes. Receives `undefined` when the snapshot is cleared by `reset()`. */
-  onResumeSnapshotChange?: (snapshot: GenerationResumeSnapshot | undefined) => void
+  onResumeSnapshotChange?: (
+    snapshot: GenerationResumeSnapshot | undefined,
+  ) => void
 }
 
 /**

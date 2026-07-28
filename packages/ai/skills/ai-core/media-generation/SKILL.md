@@ -569,17 +569,17 @@ returns `usage` and emits a `video:usage` devtools event when fal reports it.
 
 All generation hooks return the same shape:
 
-| Property         | Type                       | Description                                      |
-| ---------------- | -------------------------- | ------------------------------------------------ |
-| `generate`       | `(input) => Promise<void>` | Trigger generation                               |
-| `result`         | `T \| null`                | Result (optionally transformed via `onResult`)   |
-| `isLoading`      | `boolean`                  | Whether generation is in progress                |
-| `error`          | `Error \| undefined`       | Current error                                    |
-| `status`         | `GenerationClientState`    | `'idle' \| 'generating' \| 'success' \| 'error'` |
-| `stop`           | `() => void`               | Abort current generation                         |
-| `reset`          | `() => void`               | Clear state (and any persisted snapshot)         |
-| `resumeSnapshot` | `GenerationResumeSnapshot \| undefined` | Last run's lightweight record (see below) |
-| `resumeState`    | `GenerationResumeState \| null` | Identity of the run WHILE it streams; null after |
+| Property         | Type                                    | Description                                      |
+| ---------------- | --------------------------------------- | ------------------------------------------------ |
+| `generate`       | `(input) => Promise<void>`              | Trigger generation                               |
+| `result`         | `T \| null`                             | Result (optionally transformed via `onResult`)   |
+| `isLoading`      | `boolean`                               | Whether generation is in progress                |
+| `error`          | `Error \| undefined`                    | Current error                                    |
+| `status`         | `GenerationClientState`                 | `'idle' \| 'generating' \| 'success' \| 'error'` |
+| `stop`           | `() => void`                            | Abort current generation                         |
+| `reset`          | `() => void`                            | Clear state (and any persisted snapshot)         |
+| `resumeSnapshot` | `GenerationResumeSnapshot \| undefined` | Last run's lightweight record (see below)        |
+| `resumeState`    | `GenerationResumeState \| null`         | Identity of the run WHILE it streams; null after |
 
 Hooks also accept `persistence` (a browser storage adapter such as
 `localStoragePersistence()`) plus a stable `id`: the client then writes the

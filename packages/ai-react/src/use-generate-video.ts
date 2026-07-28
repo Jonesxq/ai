@@ -214,7 +214,9 @@ export function useGenerateVideo<TTransformed = void>(
       onVideoStatusChange: (s: VideoStatusInfo | null) => {
         if (!disposedRef.current) setVideoStatus(s)
       },
-      onResumeSnapshotChange: (snapshot: GenerationResumeSnapshot | undefined) => {
+      onResumeSnapshotChange: (
+        snapshot: GenerationResumeSnapshot | undefined,
+      ) => {
         if (!disposedRef.current) setResumeSnapshot(snapshot)
       },
     }
@@ -286,8 +288,10 @@ export function useGenerateVideo<TTransformed = void>(
     reset,
     resumeSnapshot,
     resumeState: resumeSnapshot?.resumeState ?? null,
-    pendingArtifacts: resumeSnapshot?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS,
-    resultArtifacts: resumeSnapshot?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS,
+    pendingArtifacts:
+      resumeSnapshot?.pendingArtifacts ?? EMPTY_PENDING_ARTIFACTS,
+    resultArtifacts:
+      resumeSnapshot?.result?.artifacts ?? EMPTY_RESULT_ARTIFACTS,
   }
 }
 
