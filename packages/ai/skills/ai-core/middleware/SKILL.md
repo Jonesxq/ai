@@ -440,6 +440,18 @@ Annotate your factory with a named shape (`ChatPersistence` /
 Locks are separate from state and are **not** a `stores` key: wire a
 `LockStore` with `withLocks(lockStore)`.
 
+The `runs` store in that list is typed against `RunStore`, which ships in
+`@tanstack/ai` alongside `RunRecord`, `RunStatus`, `TerminalRunStatus`,
+`isTerminalRunStatus`, `defineRunStore`, and `InMemoryRunStore`. A `RunRecord`
+tracks one run: `runId`, `threadId`, `status`, `startedAt`, plus optional
+`finishedAt`, `error`, `usage`, `sandboxKey`, and `detachedSince`. Only
+`createOrResume`, `update`, and `get` are required on a `RunStore`;
+`listByThread`, `listReclaimable`, and `findActiveRun` are optional, so a
+backend can leave any of them out and callers feature-detect
+(`store.findActiveRun?.(threadId)`). Shape your own store with
+`defineRunStore` for autocomplete without a separate `: RunStore` annotation,
+matching `defineLock`.
+
 **Full guidance lives in the package's own skills** — start at
 `node_modules/@tanstack/ai-persistence/skills/ai-persistence/SKILL.md`,
 which routes to the server, client, stores, locks, and adapter-recipe

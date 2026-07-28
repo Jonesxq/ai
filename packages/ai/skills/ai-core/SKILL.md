@@ -51,7 +51,10 @@ paused tool approval. It ships the **store contracts** (`MessageStore`,
 `withGenerationPersistence` middleware, `reconstructChat` for server-side
 hydrate, an in-memory reference backend, and a conformance testkit. Multi-instance
 locks are **not** in this package — `LockStore` / `withLocks` ship in
-`@tanstack/ai/locks`; see ai-core/locks.
+`@tanstack/ai/locks`; see ai-core/locks. The `runs` store contract is typed
+against run lifecycle types (`RunStatus`, `RunRecord`, `RunStore`,
+`defineRunStore`, `InMemoryRunStore`), which ship in `@tanstack/ai` itself;
+see ai-core/middleware.
 
 It does **not** ship a backend for your database — you implement the stores
 against Postgres, SQLite, D1, Mongo, or whatever you run, and the package's
