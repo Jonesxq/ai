@@ -432,7 +432,16 @@ function httpFailure(
   )
 }
 
-/** External-URL Durable Streams protocol adapter. */
+/**
+ * External-URL Durable Streams protocol adapter.
+ *
+ * Returns a plain `StreamDurability`, not an `UpsertableStreamDurability`.
+ * This adapter's offsets embed a backend-assigned Next-Offset cursor, so a
+ * caller cannot choose them; there is no `upsert` implementation to supply.
+ * Omitting `upsert` is the type-level statement that this adapter does not
+ * support caller-supplied offsets, so a consumer requiring that capability
+ * gets a compile error at the wiring site instead of a runtime failure.
+ */
 export function durableStream(
   request: Request,
   options: DurableStreamOptions,
@@ -534,13 +543,7 @@ export function durableStream(
 
   return {
     resumeFrom: () => resumeOffset,
-    append: async (chunks, opts) => {
-      if (opts?.offsets !== undefined) {
-        throw new DurableStreamError(
-          'durableStream does not yet support caller-supplied offsets; ' +
-            'required for sandbox run-driver takeover (see Phase 2)',
-        )
-      }
+    append: async (chunks) => {
       if (chunks.length === 0) return []
       const batchStartOffset = appendTailOffset ?? (await ensureCreated())
       const firstSeq = nextSeq
