@@ -70,6 +70,12 @@ pointer. On the next load `useChat` reads it and:
 - **`true`** is server-authoritative.
 - **`false`** (or omitted) is off: messages live in memory only and a reload starts empty.
 
+The generation hooks (`useGenerateImage` / `useGenerateVideo` / …) make the same
+choice: `persistence: true` is server-driven and a storage adapter is
+client-driven, so a long media run survives a reload the way a conversation does.
+See [Generation persistence](./generation-persistence) for the generation-specific
+setup.
+
 ### An adapter: client-authoritative
 
 Pass the adapter directly, `persistence: localStoragePersistence()`. The

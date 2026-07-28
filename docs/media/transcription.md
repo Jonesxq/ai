@@ -397,6 +397,10 @@ export async function POST(request: Request) {
 
 TanStack AI provides React hooks and server-side streaming helpers to build full-stack audio transcription with minimal boilerplate.
 
+> **Note:** Transcribing a big file can run long — keep its status and result
+> across a reload or a dropped connection with
+> [Generation Persistence](../persistence/generation-persistence).
+
 ### Streaming Mode (Server Route + Client Hook)
 
 **Server** — Create an API route that wraps `generateTranscription` as a streaming response:

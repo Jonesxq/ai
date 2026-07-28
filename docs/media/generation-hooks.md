@@ -19,6 +19,11 @@ keywords:
 
 TanStack AI provides framework hooks for every generation type: image, audio, speech, transcription, summarization, and video. Each hook connects to a server endpoint and manages loading, error, and result state for you.
 
+> **Surviving reloads and dropped connections:** every generation hook takes the
+> same `persistence` option `useChat` does, so a long run's status and result
+> come back after a page reload or a dropped connection. See
+> [Generation Persistence](../persistence/generation-persistence).
+
 ## Overview
 
 Generation hooks share a consistent API across all media types:

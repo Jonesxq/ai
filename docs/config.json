@@ -242,7 +242,7 @@
           "label": "Overview",
           "to": "persistence/overview",
           "addedAt": "2026-07-22",
-          "updatedAt": "2026-07-27"
+          "updatedAt": "2026-07-28"
         },
         {
           "label": "Chat Persistence",
@@ -254,13 +254,18 @@
           "label": "Client Persistence",
           "to": "persistence/client-persistence",
           "addedAt": "2026-07-22",
-          "updatedAt": "2026-07-27"
+          "updatedAt": "2026-07-28"
         },
         {
           "label": "Generation Persistence",
           "to": "persistence/generation-persistence",
           "addedAt": "2026-07-28",
           "updatedAt": "2026-07-28"
+        },
+        {
+          "label": "Keep Generated Files",
+          "to": "persistence/keep-generated-files",
+          "addedAt": "2026-07-28"
         },
         {
           "label": "Controls",
@@ -383,7 +388,7 @@
           "label": "Transcription",
           "to": "media/transcription",
           "addedAt": "2026-04-15",
-          "updatedAt": "2026-07-03"
+          "updatedAt": "2026-07-28"
         },
         {
           "label": "Audio Recording",
@@ -395,25 +400,25 @@
           "label": "Audio Generation",
           "to": "media/audio-generation",
           "addedAt": "2026-04-23",
-          "updatedAt": "2026-06-08"
+          "updatedAt": "2026-07-28"
         },
         {
           "label": "Image Generation",
           "to": "media/image-generation",
           "addedAt": "2026-04-15",
-          "updatedAt": "2026-07-07"
+          "updatedAt": "2026-07-28"
         },
         {
           "label": "Video Generation",
           "to": "media/video-generation",
           "addedAt": "2026-04-15",
-          "updatedAt": "2026-07-02"
+          "updatedAt": "2026-07-28"
         },
         {
           "label": "Generation Hooks",
           "to": "media/generation-hooks",
           "addedAt": "2026-04-15",
-          "updatedAt": "2026-07-10"
+          "updatedAt": "2026-07-28"
         }
       ]
     },

@@ -508,6 +508,9 @@ try {
 
 TanStack AI provides React hooks and server-side streaming helpers to build full-stack image generation with minimal boilerplate.
 
+> **Note:** To keep a batch across reloads, or to keep the images after the
+> provider's URLs expire, add [Generation Persistence](../persistence/generation-persistence).
+
 ### Streaming Mode (Server Route + Client Hook)
 
 **Server** — Create an API route that wraps `generateImage` as a streaming response:

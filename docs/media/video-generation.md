@@ -46,6 +46,13 @@ Currently supported:
 - **Grok (xAI)**: grok-imagine-video (text-to-video + image-to-video) and grok-imagine-video-1.5 (image-to-video only) models
 - **fal.ai**: MiniMax, Luma, Kling, Hunyuan, and other hosted video models
 
+> **Video runs take minutes — don't lose them to a reload.** This is the
+> strongest case for [Generation Persistence](../persistence/generation-persistence):
+> it keeps a record of each job so a page reload or dropped connection picks the
+> run back up instead of starting over. And because provider video URLs expire,
+> [keep the finished clip](../persistence/keep-generated-files) by saving its
+> bytes to your own storage.
+
 ## Basic Usage
 
 ### Creating a Video Job
