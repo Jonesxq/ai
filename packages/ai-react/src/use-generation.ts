@@ -60,10 +60,14 @@ export interface UseGenerationOptions<TInput, TResult, TOutput = TResult> {
  * Return type for the useGeneration hook.
  *
  * @template TOutput - The output type (after optional transform)
+ * @template TInput - The input type accepted by `generate` (defaults to any object)
  */
-export interface UseGenerationReturn<TOutput> {
+export interface UseGenerationReturn<
+  TOutput,
+  TInput extends Record<string, any> = Record<string, any>,
+> {
   /** Trigger a generation request */
-  generate: (input: Record<string, any>) => Promise<void>
+  generate: (input: TInput) => Promise<void>
   /** The generation result, or null if not yet generated */
   result: TOutput | null
   /** Whether a generation is currently in progress */
@@ -119,7 +123,10 @@ export function useGeneration<
   options: Omit<UseGenerationOptions<TInput, TResult>, 'onResult'> & {
     onResult?: (result: TResult) => TTransformed
   },
-): UseGenerationReturn<InferGenerationOutputFromReturn<TResult, TTransformed>> {
+): UseGenerationReturn<
+  InferGenerationOutputFromReturn<TResult, TTransformed>,
+  TInput
+> {
   type TOutput = InferGenerationOutputFromReturn<TResult, TTransformed>
   const hookId = useId()
   const clientId = options.id || hookId
@@ -244,7 +251,7 @@ export function useGeneration<
   }, [client])
 
   return {
-    generate: generate as (input: Record<string, any>) => Promise<void>,
+    generate,
     result,
     isLoading,
     error,
