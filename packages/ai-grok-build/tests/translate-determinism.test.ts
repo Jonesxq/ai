@@ -7,6 +7,7 @@ import {
   SandboxCapability,
   chunkFingerprint,
   createRunScopedIdGen,
+  journalPaths,
 } from '@tanstack/ai-sandbox'
 import { grokBuildText } from '../src/index'
 import { translateThreadEvents } from '../src/stream/translate'
@@ -156,7 +157,13 @@ describe('chatStreamNdjson wiring (real adapter, journaled call site)', () => {
     const sbx = await provider.create({})
     await sbx.fs.write('/workspace/fake-grok.mjs', NATIVE_FAKE_GROK)
 
-    const runId = 'run-wiring-check'
+    // Unique per invocation. Journals live at a real host path
+    // (`/tmp/tanstack-runs`) OUTSIDE this test's own sandbox cleanup, and they
+    // are append-only by design. A fixed literal id appends to the PREVIOUS
+    // run's journal, and the reader then stops at that run's `__exit` sentinel:
+    // the test reads a stale run's events, whose ids match this same literal
+    // pattern, so it passes for the wrong reason. Keep this unique.
+    const runId = `run-wiring-check-${Date.now()}-${Math.random().toString(36).slice(2)}`
     const adapter = grokBuildText('grok-build', {
       grokExecutable: 'node fake-grok.mjs',
       protocol: 'streaming-json',
@@ -178,7 +185,16 @@ describe('chatStreamNdjson wiring (real adapter, journaled call site)', () => {
 
     expect(messageIds.length).toBeGreaterThan(0)
     for (const id of messageIds) {
-      expect(id).toMatch(/^run-wiring-check-\d+$/)
+      expect(id).toMatch(new RegExp(`^${runId}-\\d+$`))
+    }
+
+    // Best effort: drop this run's journal so `/tmp/tanstack-runs` does not grow
+    // without bound across test runs. A failure here must not fail the test.
+    try {
+      const paths = journalPaths(runId)
+      await sbx.process.exec(`rm -f '${paths.journal}' '${paths.stderr}'`)
+    } catch {
+      // Ignore: cleanup is opportunistic, not part of the assertion.
     }
 
     await sbx.destroy()
