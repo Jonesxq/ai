@@ -15,6 +15,13 @@ import type {
   SandboxInstanceStore,
 } from '../instance-store'
 
+// The `./testkit` package.json subpath resolves to THIS module's build output
+// only (`dist/esm/testkit/conformance.js`), not a barrel over `src/testkit/`.
+// Re-export the journal conformance suite here so it is reachable from
+// `@tanstack/ai-sandbox/testkit` without changing that mapping.
+export { runJournalConformance } from './journal-conformance'
+export type { JournalConformanceConfig } from './journal-conformance'
+
 function makeRecord(
   overrides?: Partial<SandboxInstanceRecord>,
 ): SandboxInstanceRecord {

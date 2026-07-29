@@ -45,7 +45,7 @@ describe('journaledCommand', () => {
       journaledCommand('claude -p --output-format stream-json', paths),
     ).toBe(
       `mkdir -p '/tmp/tanstack-runs' && ` +
-        `{ claude -p --output-format stream-json; printf '{"__exit":%d}\\n' "$?"; } ` +
+        `{ ( claude -p --output-format stream-json ); printf '{"__exit":%d}\\n' "$?"; } ` +
         `>> '/tmp/tanstack-runs/r1.ndjson' 2>> '/tmp/tanstack-runs/r1.err'`,
     )
   })

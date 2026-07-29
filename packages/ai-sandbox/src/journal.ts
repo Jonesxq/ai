@@ -113,7 +113,14 @@ export function journalPaths(
 export function journaledCommand(command: string, paths: JournalPaths): string {
   return (
     `mkdir -p ${shellQuote(paths.dir)} && ` +
-    `{ ${command}; printf '{"${EXIT_SENTINEL_KEY}":%d}\\n' "$?"; } ` +
+    // `command` runs inside its OWN subshell `( … )`, not merely a `{ … }`
+    // group: a group runs in the CURRENT shell, so a bare `exit` inside
+    // `command` (an agent legitimately calling `exit N`) would terminate the
+    // whole compound statement before the sentinel `printf` ever ran — the
+    // journal would end with no `__exit` line at all. A subshell gives
+    // `exit` its own process to terminate, leaving `$?` (the subshell's exit
+    // status) and the following `printf` intact in the outer shell.
+    `{ ( ${command} ); printf '{"${EXIT_SENTINEL_KEY}":%d}\\n' "$?"; } ` +
     `>> ${shellQuote(paths.journal)} 2>> ${shellQuote(paths.stderr)}`
   )
 }
