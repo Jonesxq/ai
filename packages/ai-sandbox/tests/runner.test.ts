@@ -1,11 +1,21 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { EventType, memoryStream } from '@tanstack/ai'
 import {
   readJournalNdjson,
   spawnNdjson,
   startJournaledAgent,
   toLines,
 } from '../src/runner'
-import type { SandboxHandle, SpawnHandle } from '../src/contracts'
+import {
+  journalCleanupCommand,
+  journalFollowCommand,
+  journalPaths,
+  journalStderrReadCommand,
+} from '../src/journal'
+import { alignToStoredLog } from '../src/align'
+import type { StreamChunk } from '@tanstack/ai'
+import type { ExecResult, SandboxHandle, SpawnHandle } from '../src/contracts'
 
 async function* fromChunks(chunks: Array<string>): AsyncIterable<string> {
   for (const c of chunks) {
@@ -257,6 +267,278 @@ describe('readJournalNdjson', () => {
   })
 })
 
+/**
+ * Handle that records EVERY sandbox interaction in one ordered timeline, which
+ * is what the journal-cleanup contract is actually about: not that an `rm` is
+ * issued, but that it is issued after the sentinel, after the reader is stopped,
+ * and never on an abort.
+ */
+function timelineHandle(
+  script: Array<string>,
+  execImpl?: (command: string) => Promise<ExecResult>,
+): { handle: SandboxHandle; timeline: Array<string> } {
+  const timeline: Array<string> = []
+  const handle: SandboxHandle = {
+    ...handleSpawning([]),
+    process: {
+      exec: (command) => {
+        timeline.push(`exec:${command}`)
+        return (
+          execImpl?.(command) ??
+          Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })
+        )
+      },
+      spawn: (command) => {
+        timeline.push(`spawn:${command}`)
+        return Promise.resolve({
+          pid: -1,
+          stdout: fromChunks(script),
+          stderr: fromChunks([]),
+          stdin: {
+            write: () => Promise.resolve(),
+            end: () => Promise.resolve(),
+          },
+          wait: () => Promise.resolve(0),
+          kill: () => {
+            timeline.push('kill')
+            return Promise.resolve()
+          },
+        })
+      },
+    },
+  }
+  return { handle, timeline }
+}
+
+const R1 = journalPaths('r1')
+
+/** base64-frame text the way `journalStderrReadCommand`'s pipeline would. */
+function stderrFrame(text: string): string {
+  return btoa(text)
+}
+
+describe('readJournalNdjson journal cleanup', () => {
+  it('deletes both files after a ZERO-exit sentinel, once the read has finished', async () => {
+    const { handle, timeline } = timelineHandle(['{"a":1}\n{"__exit":0}\n'])
+    const events: Array<unknown> = []
+    for await (const event of readJournalNdjson(handle, {
+      journal: { runId: 'r1' },
+    })) {
+      events.push(event)
+      timeline.push('yield')
+    }
+    expect(events).toEqual([{ a: 1 }])
+    // The exact order is the deliverable: read, deliver, stop the tail, THEN rm.
+    expect(timeline).toEqual([
+      `spawn:${journalFollowCommand(R1, 0)}`,
+      'yield',
+      'kill',
+      `exec:${journalCleanupCommand(R1)}`,
+    ])
+    expect(journalCleanupCommand(R1)).toBe(
+      `rm -f '/tmp/tanstack-runs/r1.ndjson' '/tmp/tanstack-runs/r1.err'`,
+    )
+  })
+
+  it('deletes after a NON-ZERO sentinel too, because the run is still terminal', async () => {
+    const { handle, timeline } = timelineHandle(['{"__exit":7}\n'], (command) =>
+      Promise.resolve({
+        stdout: command.startsWith('tail')
+          ? stderrFrame('boom: tool not found\n')
+          : '',
+        stderr: '',
+        exitCode: 0,
+      }),
+    )
+    await expect(
+      collect(readJournalNdjson(handle, { journal: { runId: 'r1' } })),
+    ).rejects.toThrow(/exited with code 7: boom: tool not found/)
+    // Sidecar read first (the rm destroys it), cleanup second, throw last.
+    expect(timeline.filter((entry) => entry.startsWith('exec:'))).toEqual([
+      `exec:${journalStderrReadCommand(R1)}`,
+      `exec:${journalCleanupCommand(R1)}`,
+    ])
+  })
+
+  it('does NOT delete anything when the consumer aborts mid-read', async () => {
+    // An abort is not terminal. The consumer may be handing off to a successor
+    // host that still needs every journal byte, so both files must survive.
+    const controller = new AbortController()
+    const { handle, timeline } = timelineHandle(['{"a":1}\n', '{"b":2}\n'])
+    const events: Array<unknown> = []
+    for await (const event of readJournalNdjson(handle, {
+      journal: { runId: 'r1' },
+      signal: controller.signal,
+    })) {
+      events.push(event)
+      controller.abort()
+    }
+    expect(events).toEqual([{ a: 1 }])
+    expect(timeline.some((entry) => entry.includes('rm -f'))).toBe(false)
+    expect(timeline.filter((entry) => entry.startsWith('exec:'))).toEqual([])
+  })
+
+  it('does NOT delete anything when the journal stream ends without a sentinel', async () => {
+    // Same rule from the other direction: a truncated read (lease lost, tail
+    // killed by the provider) is not evidence the run finished.
+    const { handle, timeline } = timelineHandle(['{"a":1}\n'])
+    expect(
+      await collect(readJournalNdjson(handle, { journal: { runId: 'r1' } })),
+    ).toEqual([{ a: 1 }])
+    expect(timeline.filter((entry) => entry.startsWith('exec:'))).toEqual([])
+  })
+
+  it('never deletes before the sentinel is observed', async () => {
+    const { handle, timeline } = timelineHandle([
+      '{"a":1}\n',
+      '{"b":2}\n',
+      '{"__exit":0}\n',
+    ])
+    const seenAtCleanup: Array<number> = []
+    let delivered = 0
+    for await (const event of readJournalNdjson(handle, {
+      journal: { runId: 'r1' },
+    })) {
+      void event
+      delivered += 1
+      if (timeline.some((entry) => entry.includes('rm -f'))) {
+        seenAtCleanup.push(delivered)
+      }
+    }
+    // No `rm` was observed while events were still being delivered, and the run
+    // did deliver every event before the sentinel.
+    expect(seenAtCleanup).toEqual([])
+    expect(delivered).toBe(2)
+    expect(timeline[timeline.length - 1]).toBe(
+      `exec:${journalCleanupCommand(R1)}`,
+    )
+  })
+
+  it('a failing rm never fails a run that already completed', async () => {
+    const { handle } = timelineHandle(['{"a":1}\n{"__exit":0}\n'], (command) =>
+      command.startsWith('rm -f')
+        ? Promise.reject(new Error('rm: /tmp: read-only file system'))
+        : Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }),
+    )
+    expect(
+      await collect(readJournalNdjson(handle, { journal: { runId: 'r1' } })),
+    ).toEqual([{ a: 1 }])
+  })
+
+  it('a failing rm does not mask the real non-zero-exit error', async () => {
+    const { handle } = timelineHandle(['{"__exit":7}\n'], (command) =>
+      command.startsWith('rm -f')
+        ? Promise.reject(new Error('rm: /tmp: read-only file system'))
+        : Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }),
+    )
+    await expect(
+      collect(readJournalNdjson(handle, { journal: { runId: 'r1' } })),
+    ).rejects.toThrow(/exited with code 7/)
+  })
+
+  it('a failing sidecar read still throws the exit-code error, without stderr', async () => {
+    const { handle } = timelineHandle(['{"__exit":7}\n'], (command) =>
+      command.startsWith('tail')
+        ? Promise.reject(new Error('exec unavailable'))
+        : Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }),
+    )
+    await expect(
+      collect(readJournalNdjson(handle, { journal: { runId: 'r1' } })),
+    ).rejects.toThrow(/^Agent process exited with code 7$/)
+  })
+
+  it('a corrupt sidecar frame still throws the exit-code error', async () => {
+    // `decodeBase64Stream` fails loud on a mid-quantum remainder. That must not
+    // replace the agent's failure with a decoding failure.
+    const { handle } = timelineHandle(['{"__exit":7}\n'], (command) =>
+      Promise.resolve({
+        stdout: command.startsWith('tail') ? 'aaaaa' : '',
+        stderr: '',
+        exitCode: 0,
+      }),
+    )
+    await expect(
+      collect(readJournalNdjson(handle, { journal: { runId: 'r1' } })),
+    ).rejects.toThrow(/^Agent process exited with code 7$/)
+  })
+
+  it('bounds the attached stderr the same way the unjournaled path does', async () => {
+    const { handle } = timelineHandle(['{"__exit":7}\n'], (command) =>
+      Promise.resolve({
+        stdout: command.startsWith('tail') ? stderrFrame('x'.repeat(4000)) : '',
+        stderr: '',
+        exitCode: 0,
+      }),
+    )
+    const error = await collect(
+      readJournalNdjson(handle, { journal: { runId: 'r1' } }),
+    ).catch((cause: unknown) => cause)
+    if (!(error instanceof Error)) throw new Error('expected a thrown Error')
+    expect(error.message).toHaveLength(
+      'Agent process exited with code 7: '.length + 1000,
+    )
+  })
+})
+
+describe('a late takeover after journal cleanup', () => {
+  it('is safe by construction: alignment reads the event log, not the journal', () => {
+    // The ordering argument only holds if nothing downstream of terminal needs
+    // the journal. `alignToStoredLog` is that downstream step, and its input is
+    // the stored log: it takes no SandboxHandle and no JournalPaths, and reads
+    // the delivered prefix with `durability.snapshot()`. Asserted against the
+    // source so a future edit that reaches for the journal breaks here.
+    const source = readFileSync(
+      new URL('../src/align.ts', import.meta.url),
+      'utf8',
+    )
+    expect(source).toContain('options.durability.snapshot()')
+    for (const forbidden of [
+      'paths.journal',
+      'JournalPaths',
+      'SandboxHandle',
+      'readJournal',
+      'journalReadCommand',
+      'journalFollowCommand',
+      "from './journal",
+    ]) {
+      expect(source).not.toContain(forbidden)
+    }
+  })
+
+  it('re-aligns a replayed prefix from the stored log with zero sandbox access', async () => {
+    // End to end: a run reaches its sentinel and its journal is deleted, and a
+    // successor host can still suppress the delivered prefix and forward only
+    // the remainder — using the log alone.
+    const { handle, timeline } = timelineHandle(['{"a":1}\n{"__exit":0}\n'])
+    await collect(readJournalNdjson(handle, { journal: { runId: 'r1' } }))
+    expect(timeline).toContain(`exec:${journalCleanupCommand(R1)}`)
+
+    const durability = memoryStream(
+      new Request('http://test.local/api/chat?runId=runner-cleanup-takeover', {
+        method: 'POST',
+      }),
+    )
+    const chunk = (delta: string): StreamChunk => ({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: 'm1',
+      delta,
+      timestamp: 1,
+    })
+    await durability.append([chunk('a')])
+    const forwarded: Array<StreamChunk> = []
+    for await (const out of alignToStoredLog(
+      (async function* () {
+        yield chunk('a')
+        yield chunk('b')
+      })(),
+      { durability },
+    )) {
+      forwarded.push(out)
+    }
+    expect(forwarded).toEqual([chunk('b')])
+  })
+})
+
 describe('spawnNdjson with journaling', () => {
   it('starts the agent journaled and reads the journal back, one code path', async () => {
     const { handle, commands } = scriptedHandle([
@@ -277,8 +559,12 @@ describe('spawnNdjson with journaling', () => {
     await collect(
       spawnNdjson(handle, 'agent', { journal: { runId: 'r1', attach: true } }),
     )
-    expect(commands).toHaveLength(1)
+    // Two commands, neither of them an agent: the tail, then the cleanup `rm`
+    // the terminal sentinel triggers. The agent is already running elsewhere.
+    expect(commands).toHaveLength(2)
     expect(commands[0]).toContain('tail -c +1 -f')
+    expect(commands[1]).toBe(journalCleanupCommand(R1))
+    expect(commands.some((command) => command.includes('agent'))).toBe(false)
   })
 
   it('keeps the unjournaled path byte-identical when no journal option is passed', async () => {

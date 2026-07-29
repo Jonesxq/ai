@@ -230,3 +230,81 @@ export function journalReadCommand(
 export function journalExistsCommand(paths: JournalPaths): string {
   return `test -f ${shellQuote(paths.journal)}`
 }
+
+/** Bytes of the stderr sidecar {@link journalStderrReadCommand} reads by default. */
+const DEFAULT_STDERR_TAIL_BYTES = 4096
+
+/**
+ * Bounded read of the stderr SIDECAR (not the journal), so a non-zero exit can
+ * carry the agent's own diagnostics instead of a bare exit code.
+ *
+ * `exec`-only, like {@link journalReadCommand}, and base64-framed for the same
+ * reason: `exec` closes the encoder's stdin so it flushes, and the frame keeps a
+ * provider that folds stderr into stdout from splicing its own text into the
+ * bytes. Unlike the journal, the sidecar is NOT line-delimited JSON — an agent
+ * writes whatever it likes there, including partial lines and raw control bytes
+ * — so framing is what makes it safe to hand to a single `ExecResult.stdout`.
+ *
+ * `tail -c -N` (the LAST N bytes) rather than the first: the read has to be
+ * bounded, because a runaway agent's sidecar can be arbitrarily large and this
+ * runs on the host, and a crash's cause is at the end of stderr, not the start.
+ * The cost is that the first character can be a truncated UTF-8 sequence; the
+ * caller decodes lossily rather than failing, since this text is diagnostic.
+ */
+export function journalStderrReadCommand(
+  paths: JournalPaths,
+  maxBytes: number = DEFAULT_STDERR_TAIL_BYTES,
+): string {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new Error(
+      `journal: maxBytes must be a positive safe integer, got ${maxBytes}`,
+    )
+  }
+  return `tail -c -${maxBytes} ${shellQuote(paths.stderr)} 2>/dev/null | base64`
+}
+
+/**
+ * Delete both of a run's journal files.
+ *
+ * **Ordering is the whole contract here, not the `rm`.** This may only run once
+ * the run is TERMINAL — i.e. after the `{"__exit":N}` sentinel has been observed
+ * — and must never run on an abort. The three claims that make the deletion safe:
+ *
+ * 1. **Terminal means the event log holds the whole run.** The journal exists so
+ *    a successor host can replay a run from byte 0 and re-derive the chunks a
+ *    dead host never got to append. Once the sentinel has been read and the
+ *    replay has been forwarded, the log — not the journal — is the record. A late
+ *    takeover therefore aligns against the log: `align.ts`'s `alignToStoredLog`
+ *    takes a `StreamDurability` and an `AsyncIterable<StreamChunk>`, has no
+ *    `SandboxHandle` and no {@link JournalPaths} in its signature, and reads the
+ *    prefix with `durability.snapshot()`. It *cannot* read the journal, so
+ *    deleting one that is terminal cannot break it.
+ * 2. **A non-zero exit is terminal too.** `{"__exit":7}` is as final as
+ *    `{"__exit":0}`; the run failed, it is not resumable, and the failure is
+ *    already on its way to the client as a `RUN_ERROR`. Keeping a failed run's
+ *    journal would leak exactly the runs most likely to be numerous.
+ * 3. **An abort is NOT terminal.** A consumer that stops early (lease lost,
+ *    client gone, host shutting down) may be handing the run off to a successor
+ *    host that still needs every byte, so an aborted read must leave both files
+ *    alone.
+ *
+ * Shell `rm`, never `handle.fs.remove`: rule 3 in the module doc. On
+ * local-process `/tmp` resolves under the sandbox root through `fs.*` but to the
+ * host's real `/tmp` through the shell, so an `fs.remove` would delete a
+ * different path than the one `journaledCommand` wrote — i.e. nothing, silently.
+ *
+ * `-f` so a journal that is already gone (a provider that reaped `/tmp`, a
+ * successor that cleaned up first) is a success, not an error. Callers treat the
+ * whole thing as best effort regardless: a failed cleanup must never fail a run
+ * that has already completed.
+ *
+ * **What this does NOT bound:** a run that reaches its sentinel while DETACHED
+ * has no host reading its journal, so nothing ever observes the sentinel and
+ * nothing calls this. That journal leaks until the sandbox dies, which on a
+ * `keepAlive` sandbox may be never. Bounding it needs a sweep over
+ * {@link DEFAULT_JOURNAL_DIR} that deletes journals whose runs the store says
+ * are terminal — Phase 4 reaper work, deliberately not invented here.
+ */
+export function journalCleanupCommand(paths: JournalPaths): string {
+  return `rm -f ${shellQuote(paths.journal)} ${shellQuote(paths.stderr)}`
+}

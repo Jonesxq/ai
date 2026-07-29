@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_JOURNAL_DIR,
+  journalCleanupCommand,
   journalExistsCommand,
   journalFollowCommand,
   journalPaths,
   journalReadCommand,
+  journalStderrReadCommand,
   journaledCommand,
 } from '../src/journal'
 
@@ -141,5 +143,96 @@ describe('journalExistsCommand', () => {
     expect(journalExistsCommand(journalPaths('r1'))).toBe(
       `test -f '/tmp/tanstack-runs/r1.ndjson'`,
     )
+  })
+})
+
+describe('journalStderrReadCommand', () => {
+  it('reads a BOUNDED tail of the sidecar, base64-framed, stderr silenced', () => {
+    expect(journalStderrReadCommand(journalPaths('r1'))).toBe(
+      `tail -c -4096 '/tmp/tanstack-runs/r1.err' 2>/dev/null | base64`,
+    )
+  })
+
+  it('reads the sidecar and never the journal', () => {
+    const cmd = journalStderrReadCommand(journalPaths('r1'))
+    expect(cmd).toContain(`'/tmp/tanstack-runs/r1.err'`)
+    expect(cmd).not.toContain('.ndjson')
+  })
+
+  it('keeps the base64 frame and drops -f, because this is an exec read', () => {
+    // Same reasoning as `journalReadCommand`: `exec` closes the encoder's stdin
+    // so it flushes, and an unbounded following read would never terminate. The
+    // sidecar is NOT line-delimited JSON, so the frame is what makes a provider
+    // that folds stderr into stdout harmless here.
+    const cmd = journalStderrReadCommand(journalPaths('r1'))
+    expect(cmd).toContain('| base64')
+    expect(cmd).not.toContain('-f ')
+  })
+
+  it('honors an explicit byte bound', () => {
+    expect(journalStderrReadCommand(journalPaths('r1'), 64)).toContain(
+      'tail -c -64',
+    )
+  })
+
+  it('rejects a non-positive bound rather than emitting an unbounded read', () => {
+    expect(() => journalStderrReadCommand(journalPaths('r1'), 0)).toThrow(
+      /maxBytes/,
+    )
+    expect(() => journalStderrReadCommand(journalPaths('r1'), -5)).toThrow(
+      /maxBytes/,
+    )
+    expect(() => journalStderrReadCommand(journalPaths('r1'), 1.5)).toThrow(
+      /maxBytes/,
+    )
+  })
+
+  it('quotes an adversarial runId so the sidecar read cannot inject shell', () => {
+    const paths = journalPaths(`a'; rm -rf /; echo $(whoami)`)
+    const cmd = journalStderrReadCommand(paths)
+    expect(cmd).toContain(`'${paths.stderr.replaceAll("'", `'\\''`)}'`)
+    expect(cmd).not.toContain('rm -rf /')
+    expect(cmd).not.toContain('$(whoami)')
+  })
+})
+
+describe('journalCleanupCommand', () => {
+  it("removes BOTH of a run's files in one shell rm -f", () => {
+    expect(journalCleanupCommand(journalPaths('r1'))).toBe(
+      `rm -f '/tmp/tanstack-runs/r1.ndjson' '/tmp/tanstack-runs/r1.err'`,
+    )
+  })
+
+  it('deletes through the shell, never through fs.* (rule 3)', () => {
+    // On local-process, `/tmp` resolves under the sandbox root through `fs.*`
+    // but to the host's real `/tmp` through the shell — an `fs.remove` would
+    // delete a different path than `journaledCommand` wrote, i.e. nothing.
+    // Asserting the exact string is how that stays true.
+    expect(journalCleanupCommand(journalPaths('r1'))).toMatch(/^rm -f /)
+  })
+
+  it('uses -f so an already-deleted journal is a success, not an error', () => {
+    // A provider may have reaped `/tmp`, or a successor host may have cleaned up
+    // first. Neither is a failure of the run.
+    expect(journalCleanupCommand(journalPaths('r1'))).toContain('rm -f')
+  })
+
+  it('quotes an adversarial runId so cleanup cannot rm anything else', () => {
+    const paths = journalPaths(`a'; rm -rf /; echo $(whoami) "b`)
+    const cmd = journalCleanupCommand(paths)
+    expect(cmd).toContain(`'${paths.journal.replaceAll("'", `'\\''`)}'`)
+    expect(cmd).toContain(`'${paths.stderr.replaceAll("'", `'\\''`)}'`)
+    expect(cmd).not.toContain('rm -rf /')
+    expect(cmd).not.toContain('$(whoami)')
+  })
+
+  it('never touches the journal DIRECTORY, which other runs share', () => {
+    const cmd = journalCleanupCommand(journalPaths('r1'))
+    // `-f` and nothing else: no `-r`, which is the flag that would let a
+    // mis-derived path take the whole shared directory with it.
+    expect(cmd.split(' ').filter((word) => word.startsWith('-'))).toEqual([
+      '-f',
+    ])
+    expect(cmd).not.toContain(`'${DEFAULT_JOURNAL_DIR}'`)
   })
 })

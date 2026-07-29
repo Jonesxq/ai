@@ -14,8 +14,16 @@
  * 0). `spawnNdjson`'s signature and unjournaled behavior are unchanged; every
  * existing caller keeps working exactly as before.
  */
-import { EXIT_SENTINEL_KEY, journalPaths, journaledCommand } from './journal'
+import {
+  EXIT_SENTINEL_KEY,
+  journalCleanupCommand,
+  journalPaths,
+  journalStderrReadCommand,
+  journaledCommand,
+} from './journal'
 import { readJournal } from './journal-reader'
+import { decodeBase64Stream } from './journal-bytes'
+import type { JournalPaths } from './journal'
 import type { ProcessOptions, SandboxHandle } from './contracts'
 
 export interface SpawnNdjsonOptions extends ProcessOptions {
@@ -123,6 +131,59 @@ export async function startJournaledAgent(
   }
 }
 
+/** Chars of stderr attached to a non-zero-exit error, on both paths. */
+const STDERR_ERROR_CHARS = 1000
+
+async function* singleValue(value: string): AsyncIterable<string> {
+  yield value
+}
+
+/**
+ * Read the tail of a run's stderr sidecar, for the error message only.
+ *
+ * Returns `''` on ANY failure — a provider whose `exec` rejects, a sidecar that
+ * no longer exists, a base64 frame the provider truncated. The caller is on its
+ * way to throwing the real failure (the agent's non-zero exit), and losing a
+ * diagnostic suffix must never replace that error with a cleanup error. Decoding
+ * is deliberately lossy: `journalStderrReadCommand` reads the LAST N bytes, so
+ * byte 0 of the frame can sit mid-character.
+ */
+async function readStderrTail(
+  handle: SandboxHandle,
+  paths: JournalPaths,
+): Promise<string> {
+  try {
+    const result = await handle.process.exec(journalStderrReadCommand(paths))
+    const decoder = new TextDecoder()
+    let text = ''
+    for await (const bytes of decodeBase64Stream(singleValue(result.stdout))) {
+      text += decoder.decode(bytes, { stream: true })
+    }
+    text += decoder.decode()
+    return text.trim()
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Delete a terminal run's journal. Best effort by construction: see
+ * {@link journalCleanupCommand} for why a failure here cannot be allowed to fail
+ * a run that has already finished.
+ */
+async function cleanupJournal(
+  handle: SandboxHandle,
+  paths: JournalPaths,
+): Promise<void> {
+  try {
+    await handle.process.exec(journalCleanupCommand(paths))
+  } catch {
+    // The sandbox may already be gone, `/tmp` may be read-only, the provider's
+    // `exec` may reject. Nothing about a completed run depends on the files
+    // still existing OR on them being gone, so there is nothing to report.
+  }
+}
+
 /**
  * Read a run's journal and yield each line parsed as JSON.
  *
@@ -134,21 +195,37 @@ export async function startJournaledAgent(
  * `wait()` on here: the host holds a `tail`, not the agent process, so the
  * sentinel line IS the exit code.
  *
- * Known regression, stated rather than silently accepted: the unjournaled path
- * below attaches up to 1000 chars of captured stderr to the thrown error. The
- * journaled agent's stderr goes to `paths.stderr` (a sidecar file nothing here
- * reads), so a non-zero exit in journaled mode throws with a bare
- * `Agent process exited with code N` and no stderr text. Reading that sidecar
- * back requires a shell read command this task does not have — `journal.ts`
- * (owned by a different task) only exposes read commands for the journal file,
- * not the stderr sidecar — so surfacing it is left to a follow-up rather than
- * invented here ad hoc.
+ * The sentinel is also what bounds journal growth: reaching it means the run is
+ * terminal, and a terminal run's record is the event log, so both journal files
+ * are deleted before this iterable finishes. The ordering below is load-bearing
+ * and is asserted, not merely commented:
+ *
+ * - The sentinel is captured and the loop is `break`-ed, so the source's
+ *   `finally` kills the `tail` BEFORE the `rm` runs — the reader is stopped, then
+ *   its input is deleted, never the other way round.
+ * - `exitCode` stays `undefined` if the journal stream ends without a sentinel
+ *   (the consumer aborted, the lease was lost, the poll was cancelled). That
+ *   path returns having deleted nothing: the run may be mid-flight and a
+ *   successor host may still need every byte.
+ * - A non-zero sentinel deletes too. The run is terminal either way.
+ * - The stderr sidecar is read BEFORE the deletion that destroys it, so a
+ *   non-zero exit carries up to {@link STDERR_ERROR_CHARS} chars of the agent's
+ *   own diagnostics, exactly as the unjournaled path below does. That closes the
+ *   "Known regression" this function used to document; the read is bounded and
+ *   failure-swallowing (see {@link readStderrTail}), so it cannot turn a run
+ *   failure into a cleanup failure.
+ *
+ * One case this does NOT bound: a run that reaches its sentinel while DETACHED
+ * has no host reading it, so nothing observes the sentinel and nothing here
+ * runs. That journal leaks until the sandbox dies. Sweeping those needs the
+ * store's terminal-run list, i.e. Phase 4 reaper work.
  */
 export async function* readJournalNdjson(
   handle: SandboxHandle,
   options: JournaledOptions,
 ): AsyncIterable<unknown> {
   const paths = resolvePaths(options)
+  let exitCode: number | undefined
   for await (const { line } of readJournal(handle, {
     paths,
     fromByte: 0,
@@ -172,13 +249,24 @@ export async function* readJournalNdjson(
       EXIT_SENTINEL_KEY in parsed
     ) {
       const code = (parsed as Record<string, unknown>)[EXIT_SENTINEL_KEY]
-      if (typeof code === 'number' && code !== 0) {
-        // See the "Known regression" note above: stderr is not available here.
-        throw new Error(`Agent process exited with code ${code}`)
-      }
-      return
+      // A sentinel whose value is not a number still means the agent exited;
+      // treat it as success, exactly as this function always has.
+      exitCode = typeof code === 'number' ? code : 0
+      break
     }
     yield parsed
+  }
+
+  // Not terminal: the stream ended without a sentinel. Leave both files.
+  if (exitCode === undefined) return
+
+  const stderr = exitCode === 0 ? '' : await readStderrTail(handle, paths)
+  await cleanupJournal(handle, paths)
+  if (exitCode !== 0) {
+    throw new Error(
+      `Agent process exited with code ${exitCode}` +
+        (stderr ? `: ${stderr.slice(0, STDERR_ERROR_CHARS)}` : ''),
+    )
   }
 }
 
@@ -250,7 +338,7 @@ export async function* spawnNdjson(
     const stderr = stderrChunks.join('').trim()
     throw new Error(
       `Agent process exited with code ${exitCode}` +
-        (stderr ? `: ${stderr.slice(0, 1000)}` : ''),
+        (stderr ? `: ${stderr.slice(0, STDERR_ERROR_CHARS)}` : ''),
     )
   }
 }
