@@ -36,6 +36,7 @@ function handleSpawning(chunks: Array<string>): SandboxHandle {
       ports: false,
       backgroundProcesses: true,
       writableStdin: true,
+      killableProcesses: true,
       snapshots: false,
       networkPolicy: false,
       durableFilesystem: false,

@@ -81,6 +81,7 @@ export const FULL_CAPS: SandboxCapabilities = {
   ports: true,
   backgroundProcesses: true,
   writableStdin: true,
+  killableProcesses: true,
   snapshots: true,
   networkPolicy: true,
   durableFilesystem: true,
