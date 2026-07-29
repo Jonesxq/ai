@@ -66,6 +66,10 @@ describe.skipIf(!hasCreds)('vercel provider (gated on VERCEL_TOKEN)', () => {
       expect(echo.stdout.trim()).toBe('hello-vercel')
       expect(echo.exitCode).toBe(0)
 
+      // kill()/abort both drive the same AbortController threaded into
+      // sandbox.runCommand's `signal`, so a spawned process is killable.
+      expect(sbx.capabilities.killableProcesses).toBe(true)
+
       await sbx.fs.write('/workspace/note.txt', 'inside the microVM')
       expect(await sbx.fs.exists('/workspace/note.txt')).toBe(true)
       expect(await sbx.fs.read('/workspace/note.txt')).toBe(

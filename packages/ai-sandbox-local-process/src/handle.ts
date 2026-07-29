@@ -101,6 +101,11 @@ export const LOCAL_PROCESS_CAPS: SandboxCapabilities = {
   ports: true,
   backgroundProcesses: true,
   writableStdin: true,
+  // `killTree` forcibly kills the spawned `sh` wrapper AND its descendants
+  // (via taskkill /T on Windows, signal-forwarding elsewhere), and the same
+  // `killTree` runs on `signal` abort in both `exec` and `spawn` — so a
+  // spawned process is always forcibly terminable by the caller.
+  killableProcesses: true,
   snapshots: false,
   networkPolicy: false,
   durableFilesystem: true,

@@ -43,6 +43,10 @@ export const SPRITES_CAPS: SandboxCapabilities = {
   // stdin channel here, so adapters that feed a prompt over stdin must deliver
   // it via a file + shell redirection instead.
   writableStdin: false,
+  // `spawnProcess.kill()` delegates to the Sprite exec stream's own `kill()`,
+  // and `signal` is passed straight through to `client.exec` — both forcibly
+  // terminate the remote process, so a spawned process is killable.
+  killableProcesses: true,
   // Sprites checkpoints capture the writable filesystem overlay. Exposed via
   // `snapshot()` (create) and the provider-specific `restoreCheckpoint()` /
   // `listCheckpoints()`. Note: restore is in-place on the same Sprite, and a

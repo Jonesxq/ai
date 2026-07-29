@@ -28,6 +28,10 @@ describe.skipIf(!dockerAvailable)(
         expect(echo.stdout.trim()).toBe('hello-docker')
         expect(echo.exitCode).toBe(0)
 
+        // kill()/abort destroy the hijacked exec stream, forcibly terminating
+        // the container-side process.
+        expect(sbx.capabilities.killableProcesses).toBe(true)
+
         await sbx.fs.write('/workspace/note.txt', 'inside the container')
         expect(await sbx.fs.exists('/workspace/note.txt')).toBe(true)
         expect(await sbx.fs.read('/workspace/note.txt')).toBe(

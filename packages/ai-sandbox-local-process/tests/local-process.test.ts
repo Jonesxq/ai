@@ -88,6 +88,12 @@ describe('local-process process', () => {
     expect(code).toBe(0)
     await sbx.destroy()
   })
+
+  it('advertises killableProcesses (killTree forcibly kills spawned processes)', async () => {
+    const sbx = await fresh()
+    expect(sbx.capabilities.killableProcesses).toBe(true)
+    await sbx.destroy()
+  })
 })
 
 describe('local-process + spawnNdjson (real agent-CLI streaming)', () => {

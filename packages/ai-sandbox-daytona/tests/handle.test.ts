@@ -22,6 +22,19 @@ function fakeSandbox(preview: {
   } as unknown as Sandbox
 }
 
+describe('DaytonaHandle capabilities', () => {
+  it('advertises killableProcesses (kill() deletes the session, terminating its command)', () => {
+    const sandbox = fakeSandbox({
+      url: 'https://5173-sbx-1.proxy.daytona.work',
+    })
+    const handle = new DaytonaHandle({
+      sandbox,
+      workdir: '/home/daytona/workspace',
+    })
+    expect(handle.capabilities.killableProcesses).toBe(true)
+  })
+})
+
 describe('DaytonaHandle.ports.connect', () => {
   it('returns a signed preview URL for private sandboxes', async () => {
     const sandbox = fakeSandbox({

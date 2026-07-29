@@ -87,6 +87,10 @@ describe('CloudflareHandle', () => {
     expect(CLOUDFLARE_CAPS.fork).toBe(false)
     expect(CLOUDFLARE_CAPS.exec).toBe(true)
     expect(CLOUDFLARE_CAPS.fs).toBe(true)
+    // kill() is a no-op and the abort signal is dropped (exec and spawn
+    // alike), so a spawned follower process can never be stopped by the
+    // caller here.
+    expect(CLOUDFLARE_CAPS.killableProcesses).toBe(false)
   })
 
   it('round-trips files over base64 exec', async () => {

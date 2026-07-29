@@ -38,6 +38,12 @@ export const DAYTONA_CAPS: SandboxCapabilities = {
   // stdin stream, so adapters that feed a prompt over stdin must deliver it via
   // a file + shell redirection instead.
   writableStdin: false,
+  // `spawnProcess.kill()` (and `signal` abort, which feeds the same
+  // controller) stops the poll loop AND deletes the Daytona session via
+  // `deleteSession`, which terminates the session's running command — a
+  // spawned process is forcibly terminable, if slightly delayed vs. a
+  // native signal (bounded by session teardown rather than instant SIGKILL).
+  killableProcesses: true,
   snapshots: false,
   networkPolicy: false,
   // The sandbox filesystem persists for the sandbox's lifetime (across exec

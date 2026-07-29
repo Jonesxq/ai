@@ -31,6 +31,11 @@ export const VERCEL_CAPS: SandboxCapabilities = {
   // Vercel detached commands stream logs out but expose no host→process stdin,
   // so adapters that feed a prompt over stdin must use a file + shell redirect.
   writableStdin: false,
+  // `spawnProcess.kill()` and `signal` abort both call `controller.abort()`,
+  // which is threaded through to `sandbox.runCommand`'s own `signal` — Vercel
+  // tears down the detached command on abort, so a spawned process is
+  // forcibly terminable.
+  killableProcesses: true,
   snapshots: false,
   networkPolicy: false,
   // The microVM filesystem persists for the sandbox's lifetime.

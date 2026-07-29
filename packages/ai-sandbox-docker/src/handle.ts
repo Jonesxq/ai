@@ -35,6 +35,10 @@ export const DOCKER_CAPS: SandboxCapabilities = {
   // over stdin loses its streamed output. Declare stdin non-writable so adapters
   // use the file-redirect path (`cmd < promptfile`) instead — reliable here.
   writableStdin: false,
+  // `spawnProcess.kill()` and `signal` abort both destroy the hijacked exec
+  // stream (`stream.destroy()`), which tears down the container-side process
+  // tied to that exec session — a spawned process is forcibly terminable.
+  killableProcesses: true,
   snapshots: true,
   networkPolicy: false,
   durableFilesystem: true, // container fs persists across stop/start (not removal)

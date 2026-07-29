@@ -243,6 +243,11 @@ describe('SpritesHandle lifecycle + capabilities', () => {
     expect(() => handle.fork()).toThrow(/fork/)
   })
 
+  it('advertises killableProcesses (spawn kill()/signal both reach the exec stream)', () => {
+    const { handle } = makeHandle({})
+    expect(handle.capabilities.killableProcesses).toBe(true)
+  })
+
   it('exposes a spawn handle with non-writable stdin', async () => {
     const { handle } = makeHandle({
       onExec: () => fakeStream({ stdout: 'streamed\n', exit: 0 }),
