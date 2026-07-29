@@ -1,11 +1,17 @@
 /**
  * Byte-exact framing for journal reads.
  *
- * The journal is read through `base64` (see `journal.ts` rule 2), so the host
- * receives an ASCII frame it decodes itself. That gives two properties nothing
- * else on the provider surface offers: the bytes are exactly the file's bytes
- * regardless of how a provider decoded its stdout, and a position counted over
- * them is a real file offset that `tail -c +N` can resume from.
+ * Both read paths end in {@link toJournalLines}, which counts absolute file
+ * offsets over BYTES, because a position is only useful if `tail -c +N` can
+ * resume from it. The two paths differ only in how they get bytes:
+ *
+ * - The **bounded** read is base64-framed (see `journal.ts` rule 2) and arrives
+ *   as one complete `ExecResult.stdout` string, so {@link decodeBase64Stream}
+ *   recovers the file's exact bytes regardless of how the provider decoded its
+ *   stdout.
+ * - The **follow** read cannot be base64-framed — the encoder's stdio buffer
+ *   would swallow the stream — so it arrives as provider-decoded text chunks
+ *   and {@link encodeUtf8Stream} turns them back into bytes.
  *
  * `atob`, not `Buffer`: this module runs on the host, and the host can itself be
  * a Cloudflare Worker (`ai-sandbox-cloudflare` drives its sandbox over Workers
@@ -54,6 +60,30 @@ export async function* decodeBase64Stream(
     throw new Error(
       `journal: base64 frame ended mid-quantum with ${pending.length} character(s) pending`,
     )
+  }
+}
+
+/**
+ * Re-encode provider-decoded text chunks as UTF-8 bytes.
+ *
+ * This is the follow path's replacement for {@link decodeBase64Stream}: the
+ * follow command emits the journal's raw bytes, the provider hands them over as
+ * `AsyncIterable<string>`, and `TextEncoder` round-trips that text back to the
+ * bytes it was decoded from. Chunk boundaries do not need to fall on character
+ * boundaries here — {@link toJournalLines} buffers bytes until a newline, so a
+ * multi-byte character split across two chunks is reassembled there, exactly as
+ * it is on the base64 path.
+ *
+ * Empty chunks are dropped rather than forwarded: a zero-length `Uint8Array`
+ * carries no bytes and would only make the downstream loop spin.
+ */
+export async function* encodeUtf8Stream(
+  chunks: AsyncIterable<string>,
+): AsyncIterable<Uint8Array> {
+  const encoder = new TextEncoder()
+  for await (const chunk of chunks) {
+    if (chunk.length === 0) continue
+    yield encoder.encode(chunk)
   }
 }
 

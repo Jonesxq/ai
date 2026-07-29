@@ -96,11 +96,13 @@ describe('spawnNdjson', () => {
   })
 })
 
-function b64(text: string): string {
-  return Buffer.from(text, 'utf8').toString('base64')
-}
-
-/** Handle that records commands and replays scripted stdout per spawn call. */
+/**
+ * Handle that records commands and replays scripted stdout per spawn call.
+ *
+ * Journal scripts are RAW journal text, not a base64 frame: `journalFollowCommand`
+ * pipes into nothing, because any filter's stdio buffer would swallow the stream
+ * (see `journal.ts` rule 2).
+ */
 function scriptedHandle(scripts: Array<Array<string>>): {
   handle: SandboxHandle
   commands: Array<string>
@@ -217,16 +219,14 @@ describe('startJournaledAgent', () => {
 
 describe('readJournalNdjson', () => {
   it('parses journal lines as JSON and stops at the exit sentinel', async () => {
-    const { handle } = scriptedHandle([
-      [b64('{"a":1}\n{"b":2}\n{"__exit":0}\n')],
-    ])
+    const { handle } = scriptedHandle([['{"a":1}\n{"b":2}\n{"__exit":0}\n']])
     expect(
       await collect(readJournalNdjson(handle, { journal: { runId: 'r1' } })),
     ).toEqual([{ a: 1 }, { b: 2 }])
   })
 
   it('throws on a non-zero exit sentinel so the adapter emits RUN_ERROR', async () => {
-    const { handle } = scriptedHandle([[b64('{"a":1}\n{"__exit":7}\n')]])
+    const { handle } = scriptedHandle([['{"a":1}\n{"__exit":7}\n']])
     await expect(
       collect(readJournalNdjson(handle, { journal: { runId: 'r1' } })),
     ).rejects.toThrow(/exited with code 7/)
@@ -235,7 +235,7 @@ describe('readJournalNdjson', () => {
   it('routes a non-JSON line to onNonJsonLine instead of failing the run', async () => {
     const seen: Array<string> = []
     const { handle } = scriptedHandle([
-      [b64('Claude Code starting...\n{"a":1}\n{"__exit":0}\n')],
+      ['Claude Code starting...\n{"a":1}\n{"__exit":0}\n'],
     ])
     expect(
       await collect(
@@ -249,7 +249,7 @@ describe('readJournalNdjson', () => {
   })
 
   it('reads from byte 0 on attach, so alignment sees the whole run', async () => {
-    const { handle, commands } = scriptedHandle([[b64('{"__exit":0}\n')]])
+    const { handle, commands } = scriptedHandle([['{"__exit":0}\n']])
     await collect(
       readJournalNdjson(handle, { journal: { runId: 'r1', attach: true } }),
     )
@@ -261,7 +261,7 @@ describe('spawnNdjson with journaling', () => {
   it('starts the agent journaled and reads the journal back, one code path', async () => {
     const { handle, commands } = scriptedHandle([
       [], // the agent spawn
-      [b64('{"a":1}\n{"__exit":0}\n')], // the tail spawn
+      ['{"a":1}\n{"__exit":0}\n'], // the tail spawn
     ])
     expect(
       await collect(spawnNdjson(handle, 'agent', { journal: { runId: 'r1' } })),
@@ -273,7 +273,7 @@ describe('spawnNdjson with journaling', () => {
   })
 
   it('skips the agent spawn when attaching to a run already in flight', async () => {
-    const { handle, commands } = scriptedHandle([[b64('{"__exit":0}\n')]])
+    const { handle, commands } = scriptedHandle([['{"__exit":0}\n']])
     await collect(
       spawnNdjson(handle, 'agent', { journal: { runId: 'r1', attach: true } }),
     )

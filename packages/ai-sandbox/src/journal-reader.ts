@@ -9,7 +9,9 @@
  * Two strategies, chosen by capability rather than by provider name:
  *
  * - **follow** (`spawn` + `tail -f`): the default. Streams with no polling cost
- *   and is killed when the consumer stops.
+ *   and is killed when the consumer stops. Its command pipes into nothing — see
+ *   `journal.ts` rule 2 — so this path re-encodes the provider's decoded text
+ *   rather than decoding a base64 frame.
  * - **poll** (bounded `exec`, no `-f`): for a provider whose spawned process
  *   cannot be stopped. Cloudflare's `kill()` is a documented no-op and it
  *   forwards the AbortSignal to neither `exec` nor `spawn`, so a `tail -f`
@@ -17,7 +19,11 @@
  *   on its own, so nothing needs killing.
  */
 import { journalFollowCommand, journalReadCommand } from './journal'
-import { decodeBase64Stream, toJournalLines } from './journal-bytes'
+import {
+  decodeBase64Stream,
+  encodeUtf8Stream,
+  toJournalLines,
+} from './journal-bytes'
 import type { JournalPaths } from './journal'
 import type { JournalLine } from './journal-bytes'
 import type { ProcessOptions, SandboxHandle } from './contracts'
@@ -66,6 +72,54 @@ function processOptions(options: ReadJournalOptions): ProcessOptions {
   }
 }
 
+/** Resolution of the abort race in {@link untilAborted}. Never a stream value. */
+const ABORTED = Symbol('journal-read-aborted')
+
+/**
+ * Iterate `source` but stop the moment `signal` fires, instead of waiting for
+ * the stream to close.
+ *
+ * Without this, aborting a follow read only *asks* the provider to kill `tail`
+ * and then blocks on `stdout` until that kill closes the pipe — which is not a
+ * guarantee any provider makes. On local-process/Windows, `killTree` falls back
+ * to signalling only the `sh` wrapper if `taskkill` is unavailable, leaving the
+ * `tail` grandchild holding the stdout pipe open, and the read rides past its
+ * own AbortSignal until some outer timeout fires. The signal is the caller's
+ * contract with the reader, so the reader honors it itself and treats the kill
+ * as best-effort cleanup.
+ */
+async function* untilAborted<T>(
+  source: AsyncIterable<T>,
+  signal: AbortSignal | undefined,
+): AsyncIterable<T> {
+  if (!signal) {
+    yield* source
+    return
+  }
+  if (signal.aborted) return
+  let onAbort: (() => void) | undefined
+  const aborted = new Promise<typeof ABORTED>((resolve) => {
+    onAbort = () => resolve(ABORTED)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  const iterator = source[Symbol.asyncIterator]()
+  try {
+    for (;;) {
+      const next = await Promise.race([iterator.next(), aborted])
+      if (next === ABORTED || next.done === true) return
+      yield next.value
+    }
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort)
+    // NOT awaited. On an async generator, `return()` queues behind the pending
+    // `next()` we just abandoned, so awaiting it would block for exactly as
+    // long as the stream we gave up waiting for — reintroducing the hang this
+    // helper exists to remove. The rejection is swallowed for the same reason
+    // `kill` is best-effort below: the source may already be gone.
+    void iterator.return?.().catch(() => {})
+  }
+}
+
 async function* followJournal(
   handle: SandboxHandle,
   options: ReadJournalOptions,
@@ -76,7 +130,10 @@ async function* followJournal(
     processOptions(options),
   )
   try {
-    yield* toJournalLines(decodeBase64Stream(proc.stdout), fromByte)
+    yield* toJournalLines(
+      encodeUtf8Stream(untilAborted(proc.stdout, options.signal)),
+      fromByte,
+    )
   } finally {
     // The consumer may stop early (client gone, lease lost). Providers whose
     // `kill` is real stop the `tail` here; the signal covers the rest. Guarded

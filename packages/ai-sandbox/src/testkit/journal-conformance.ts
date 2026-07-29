@@ -14,8 +14,14 @@
  * files, which already run under Vitest.
  */
 import { describe, expect, it } from 'vitest'
-import { journalPaths, journalReadCommand, journaledCommand } from '../journal'
+import {
+  journalExistsCommand,
+  journalPaths,
+  journalReadCommand,
+  journaledCommand,
+} from '../journal'
 import { journalReadStrategy, readJournal } from '../journal-reader'
+import type { JournalPaths } from '../journal'
 import type { SandboxHandle } from '../contracts'
 
 export interface JournalConformanceConfig {
@@ -36,6 +42,28 @@ export interface JournalConformanceConfig {
 /** Decode the base64 frame a journal read command produces into raw text. */
 function decodeJournalRead(stdout: string): string {
   return Buffer.from(stdout.replace(/\s+/g, ''), 'base64').toString('utf8')
+}
+
+/**
+ * Block until the run's journal file exists in the sandbox.
+ *
+ * Through the shell (`journalExistsCommand`), never `handle.fs.exists` — see
+ * rule 3 in `../journal.ts`: on local-process the two resolve `/tmp`
+ * differently, so an `fs` probe would report the wrong file.
+ */
+async function waitForJournal(
+  handle: SandboxHandle,
+  paths: JournalPaths,
+): Promise<void> {
+  const deadline = Date.now() + 15_000
+  for (;;) {
+    const probe = await handle.process.exec(journalExistsCommand(paths))
+    if (probe.exitCode === 0) return
+    if (Date.now() > deadline) {
+      throw new Error(`journal conformance: ${paths.journal} never appeared`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
 }
 
 /**
@@ -149,23 +177,16 @@ export function runJournalConformance(config: JournalConformanceConfig): void {
       }
     }, 60_000)
 
-    // KNOWN FAILING against real sandboxes as of this writing (confirmed on
-    // native git-bash `sh`/GNU coreutils `base64` AND inside a real Alpine
-    // Linux Docker container with busybox `base64` — this is not a
-    // Windows/local-process quirk). `base64` fully buffers its stdout when it
-    // is not a tty (the classic ~4KB libc stdio buffer), so `tail -f file |
-    // base64` emits NOTHING until either that buffer fills or `base64`'s
-    // stdin (the read end from `tail`) closes — i.e. until `followJournal`'s
-    // `finally` kills `tail`, by which point the consumer has already stopped
-    // reading. The follow strategy's core promise — live, incremental
-    // delivery of small journal lines — is not met by any base64
-    // implementation tested. Left as a real, visible failure rather than
-    // silenced with `.skip`/`.fails`, per this suite's no-silent-skip
-    // contract: this is a genuine defect in `journalFollowCommand`
-    // (`../journal.ts`) / the follow encoding pipeline, not a test bug, and it
-    // needs a design fix (e.g. dropping base64 framing from the follow path,
-    // or forcing unbuffered output some other way) before the follow strategy
-    // can be relied on.
+    // This case is the reason `journalFollowCommand` pipes into nothing.
+    // `tail -f journal | base64` delivers ZERO bytes while the agent is still
+    // running — measured on GNU coreutils 8.32 `base64` and on busybox 1.36.1
+    // `base64` in Alpine — because the encoder buffers its stdout until its
+    // stdin closes, which only happens when the reader kills `tail`. So the
+    // agent below writes its first line, sleeps, then writes the second: any
+    // whole-stream filter reintroduced onto the follow path delivers nothing
+    // until teardown and BOTH assertions below fail (no lines at all, and no
+    // first line inside the window). Do not "fix" a failure here by widening
+    // the window — that is the property under test.
     it('follows a journal that is still being written, when the provider can', async () => {
       const { handle, dispose } = await config.createHandle()
       try {
@@ -176,22 +197,80 @@ export function runJournalConformance(config: JournalConformanceConfig): void {
           return
         }
         const paths = journalPaths(`conf-follow-${Date.now()}`)
+        // Not awaited anywhere: reading the `__exit` sentinel below IS the
+        // proof it finished. (`SpawnHandle.wait()` is not safe to call after the
+        // fact on every provider — local-process registers a `close` listener at
+        // call time, so a `wait()` issued after the process already exited never
+        // resolves.)
         void handle.process.spawn(
           journaledCommand(
-            `printf '{"a":1}\\n'; sleep 1; printf '{"b":2}\\n'`,
+            `printf '{"a":1}\\n'; sleep 6; printf '{"b":2}\\n'`,
             paths,
           ),
         )
+        // `tail` on a file that does not exist yet exits immediately, and the
+        // agent's spawn and the reader's spawn race. Waiting removes that race
+        // WITHOUT touching the property under test: with a buffering filter on
+        // the follow path the journal still exists, `tail` still runs, and the
+        // reader still receives nothing.
+        await waitForJournal(handle, paths)
         const seen: Array<string> = []
+        const startedAt = Date.now()
+        let firstLineMs = Number.POSITIVE_INFINITY
         for await (const line of readJournal(handle, {
           paths,
           fromByte: 0,
           signal: AbortSignal.timeout(15_000),
         })) {
+          firstLineMs = Math.min(firstLineMs, Date.now() - startedAt)
           seen.push(line.line)
           if (seen.length === 3) break
         }
         expect(seen).toEqual(['{"a":1}', '{"b":2}', '{"__exit":0}'])
+        // Incremental, not merely eventual: the first line must arrive while
+        // the agent is still inside its 6s sleep, i.e. long before the journal
+        // is complete and long before anything is killed.
+        expect(firstLineMs).toBeLessThan(3_000)
+      } finally {
+        await dispose()
+      }
+    }, 60_000)
+
+    // The follow read must obey its own AbortSignal rather than waiting for the
+    // provider's `kill` to close the stream — a provider whose kill misses a
+    // grandchild would otherwise hang the reader past its deadline.
+    it('stops a follow read when its signal aborts, without a consumer break', async () => {
+      const { handle, dispose } = await config.createHandle()
+      try {
+        if (journalReadStrategy(handle) !== 'follow') {
+          expect(handle.capabilities.killableProcesses).toBe(false)
+          return
+        }
+        const paths = journalPaths(`conf-abort-${Date.now()}`)
+        // Outlives the read on purpose: the journal must still be open, and the
+        // agent still running, when the signal fires.
+        const agent = await handle.process.spawn(
+          journaledCommand(`printf '{"a":1}\\n'; sleep 30`, paths),
+        )
+        try {
+          await waitForJournal(handle, paths)
+          const startedAt = Date.now()
+          const seen: Array<string> = []
+          // No `break`: only the signal can end this loop.
+          for await (const line of readJournal(handle, {
+            paths,
+            fromByte: 0,
+            signal: AbortSignal.timeout(3_000),
+          })) {
+            seen.push(line.line)
+          }
+          expect(seen).toEqual(['{"a":1}'])
+          // Generous, because it is testing "the signal ends it at all", not
+          // how fast: the pre-fix reader rode past its signal entirely.
+          expect(Date.now() - startedAt).toBeLessThan(20_000)
+        } finally {
+          await agent.kill()
+        }
       } finally {
         await dispose()
       }

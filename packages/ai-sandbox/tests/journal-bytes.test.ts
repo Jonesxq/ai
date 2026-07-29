@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { decodeBase64Stream, toJournalLines } from '../src/journal-bytes'
+import {
+  decodeBase64Stream,
+  encodeUtf8Stream,
+  toJournalLines,
+} from '../src/journal-bytes'
 import type { JournalLine } from '../src/journal-bytes'
 
 async function* fromValues<T>(values: Array<T>): AsyncIterable<T> {
@@ -72,6 +76,42 @@ describe('decodeBase64Stream', () => {
     await expect(
       collect(decodeBase64Stream(fromValues([b64('abcdef').slice(0, 5)]))),
     ).rejects.toThrow(/mid-quantum/)
+  })
+})
+
+describe('encodeUtf8Stream', () => {
+  it('turns provider-decoded text back into the journal bytes it came from', async () => {
+    const parts = await collect(
+      encodeUtf8Stream(fromValues(['{"a":1}\n', '{"t":"café"}\n'])),
+    )
+    expect(parts.map((p) => p.length)).toEqual([8, 14])
+  })
+
+  it('drops empty chunks so the line splitter is not woken for nothing', async () => {
+    expect(
+      (await collect(encodeUtf8Stream(fromValues(['', 'a', ''])))).map(
+        (p) => p.length,
+      ),
+    ).toEqual([1])
+  })
+
+  it('yields nothing for an empty stream (an absent or empty journal)', async () => {
+    expect(await collect(encodeUtf8Stream(fromValues<string>([])))).toEqual([])
+  })
+
+  it('composes with toJournalLines to give byte-exact positions', async () => {
+    // What the follow path actually does. 'é' is 2 bytes, so the first line is
+    // 13 bytes + newline even though it is 12 UTF-16 code units.
+    const lines = await collect(
+      toJournalLines(
+        encodeUtf8Stream(fromValues(['{"t":"caf', 'é"}\n{"b":2}\n'])),
+        0,
+      ),
+    )
+    expect(lines).toEqual<Array<JournalLine>>([
+      { line: '{"t":"café"}', endPosition: 14 },
+      { line: '{"b":2}', endPosition: 22 },
+    ])
   })
 })
 

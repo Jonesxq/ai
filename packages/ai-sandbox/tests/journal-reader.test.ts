@@ -40,6 +40,17 @@ async function* fromValues(values: Array<string>): AsyncIterable<string> {
   }
 }
 
+/**
+ * Yield `values`, then hang forever. Models a provider whose `kill` fails to
+ * reach the process holding stdout open, so the stream is never closed.
+ */
+async function* neverEnding(values: Array<string>): AsyncIterable<string> {
+  yield* fromValues(values)
+  await new Promise<never>(() => {
+    // Never settles: that is the whole point.
+  })
+}
+
 function b64(text: string): string {
   return Buffer.from(text, 'utf8').toString('base64')
 }
@@ -52,7 +63,7 @@ async function collect<T>(it: AsyncIterable<T>): Promise<Array<T>> {
 
 interface FakeHandleInput {
   capabilities?: Partial<SandboxCapabilities>
-  spawnStdout?: Array<string>
+  spawnStdout?: Array<string> | AsyncIterable<string>
   exec?: (command: string) => Promise<ExecResult>
   onSpawn?: (command: string, options?: ProcessOptions) => void
   onKill?: () => void
@@ -61,7 +72,9 @@ interface FakeHandleInput {
 function fakeHandle(input: FakeHandleInput = {}): SandboxHandle {
   const spawnHandle: SpawnHandle = {
     pid: -1,
-    stdout: fromValues(input.spawnStdout ?? []),
+    stdout: Array.isArray(input.spawnStdout)
+      ? fromValues(input.spawnStdout)
+      : (input.spawnStdout ?? fromValues([])),
     stderr: fromValues([]),
     stdin: { write: () => Promise.resolve(), end: () => Promise.resolve() },
     wait: () => Promise.resolve(0),
@@ -144,14 +157,17 @@ describe('readJournal — follow strategy', () => {
   it('spawns a following tail from the requested byte and yields positioned lines', async () => {
     const commands: Array<string> = []
     const handle = fakeHandle({
-      spawnStdout: [b64('{"a":1}\n{"b":2}\n')],
+      spawnStdout: ['{"a":1}\n{"b":2}\n'],
       onSpawn: (command) => commands.push(command),
     })
     const lines = await collect(
       readJournal(handle, { paths: journalPaths('r1'), fromByte: 0 }),
     )
+    // Raw, unframed: a `| base64` here would buffer the whole stream.
     expect(commands).toEqual([
-      `tail -c +1 -f '/tmp/tanstack-runs/r1.ndjson' 2>/dev/null | base64`,
+      `mkdir -p '/tmp/tanstack-runs' 2>/dev/null; ` +
+        `: >> '/tmp/tanstack-runs/r1.ndjson' 2>/dev/null; ` +
+        `tail -c +1 -f '/tmp/tanstack-runs/r1.ndjson' 2>/dev/null`,
     ])
     expect(lines).toEqual<Array<JournalLine>>([
       { line: '{"a":1}', endPosition: 8 },
@@ -159,10 +175,36 @@ describe('readJournal — follow strategy', () => {
     ])
   })
 
+  it('counts positions in BYTES, not characters, for a multi-byte line', async () => {
+    // '{"t":"café"}' is 13 bytes but 12 UTF-16 code units: a position counted
+    // over characters would desync every following `tail -c +N`.
+    const handle = fakeHandle({ spawnStdout: ['{"t":"café"}\n'] })
+    expect(
+      await collect(readJournal(handle, { paths: journalPaths('r1') })),
+    ).toEqual<Array<JournalLine>>([{ line: '{"t":"café"}', endPosition: 14 }])
+  })
+
+  it('reassembles a line the provider split across two stdout chunks', async () => {
+    const handle = fakeHandle({ spawnStdout: ['{"a":', '1}\n{"b":2}', '\n'] })
+    expect(
+      await collect(readJournal(handle, { paths: journalPaths('r1') })),
+    ).toEqual<Array<JournalLine>>([
+      { line: '{"a":1}', endPosition: 8 },
+      { line: '{"b":2}', endPosition: 16 },
+    ])
+  })
+
+  it('withholds a trailing line the agent has not finished writing', async () => {
+    const handle = fakeHandle({ spawnStdout: ['{"a":1}\n{"par'] })
+    expect(
+      await collect(readJournal(handle, { paths: journalPaths('r1') })),
+    ).toEqual<Array<JournalLine>>([{ line: '{"a":1}', endPosition: 8 }])
+  })
+
   it('resumes from fromByte, keeping positions absolute', async () => {
     const commands: Array<string> = []
     const handle = fakeHandle({
-      spawnStdout: [b64('{"b":2}\n')],
+      spawnStdout: ['{"b":2}\n'],
       onSpawn: (command) => commands.push(command),
     })
     const lines = await collect(
@@ -179,7 +221,7 @@ describe('readJournal — follow strategy', () => {
     let forwarded: AbortSignal | undefined
     const controller = new AbortController()
     const handle = fakeHandle({
-      spawnStdout: [b64('{"a":1}\n{"b":2}\n')],
+      spawnStdout: ['{"a":1}\n{"b":2}\n'],
       onSpawn: (_command, options) => {
         forwarded = options?.signal
       },
@@ -198,10 +240,63 @@ describe('readJournal — follow strategy', () => {
   })
 
   it('never touches handle.fs (the local-process /tmp aliasing trap)', async () => {
-    const handle = fakeHandle({ spawnStdout: [b64('{"a":1}\n')] })
+    const handle = fakeHandle({ spawnStdout: ['{"a":1}\n'] })
     await expect(
       collect(readJournal(handle, { paths: journalPaths('r1') })),
     ).resolves.toHaveLength(1)
+  })
+
+  it('ends on abort even when the provider never closes stdout', async () => {
+    // The reader must not depend on `kill` closing the pipe: local-process on
+    // Windows falls back to signalling only the `sh` wrapper when `taskkill` is
+    // unavailable, leaving the `tail` grandchild holding stdout open forever.
+    // `neverEnding` models exactly that provider.
+    let killed = false
+    const controller = new AbortController()
+    const handle = fakeHandle({
+      spawnStdout: neverEnding(['{"a":1}\n']),
+      onKill: () => {
+        killed = true
+      },
+    })
+    const lines: Array<JournalLine> = []
+    const done = (async () => {
+      for await (const line of readJournal(handle, {
+        paths: journalPaths('r1'),
+        signal: controller.signal,
+      })) {
+        lines.push(line)
+      }
+    })()
+    // Let the first line through, then abort with the stream still open.
+    await vi.waitFor(() => expect(lines).toHaveLength(1))
+    controller.abort()
+    await done
+    expect(lines).toEqual<Array<JournalLine>>([
+      { line: '{"a":1}', endPosition: 8 },
+    ])
+    expect(killed).toBe(true)
+  })
+
+  it('yields nothing and tears down at once when the signal is already aborted', async () => {
+    let killed = false
+    const controller = new AbortController()
+    controller.abort()
+    const handle = fakeHandle({
+      spawnStdout: neverEnding(['{"a":1}\n']),
+      onKill: () => {
+        killed = true
+      },
+    })
+    expect(
+      await collect(
+        readJournal(handle, {
+          paths: journalPaths('r1'),
+          signal: controller.signal,
+        }),
+      ),
+    ).toEqual([])
+    expect(killed).toBe(true)
   })
 })
 
