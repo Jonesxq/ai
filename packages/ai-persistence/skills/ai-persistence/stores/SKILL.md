@@ -101,7 +101,7 @@ always a choice you made on purpose rather than a check that quietly did not
 run. Declare yours and the suite reports them as skipped with a reason:
 
 ```ts
-runPersistenceConformance('sqlite', () => ({ persistence }), {
+runPersistenceConformance('sqlite', () => persistence, {
   skipMethods: ['runs.listByThread', 'runs.listReclaimable'],
 })
 ```
