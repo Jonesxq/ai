@@ -20,6 +20,11 @@ owned by `@tanstack/ai-sandbox`, independent of `@tanstack/ai-persistence`
 (transcript / runs / interrupts). You may share a database with chat stores, but
 you compose a separate middleware.
 
+It is also not the agent's *output*. This page keeps a sandbox findable across
+processes; keeping the run's event stream readable across processes is
+[The Run Journal](./journal). The two compose: a resumed sandbox still holds the
+journal of every run that executed in it, under `/tmp/tanstack-runs`.
+
 Two pieces:
 
 - **`SandboxInstanceStore`**: map of compound key → provider sandbox id (+
@@ -190,6 +195,7 @@ create. Pair the store with a lock, either `withLocks` from
 
 ## See also
 
+- [The Run Journal](./journal): durability of a run's output, as opposed to its sandbox
 - [Locks](../advanced/locks)
 - [Lifecycle](./lifecycle)
 - [Persistence overview](../persistence/overview) — chat state only

@@ -39,6 +39,46 @@ const stream = chat({
 })
 ```
 
+## Harness output goes to a journal
+
+`grokBuildText`, `claudeCodeText`, and `codexText` do not hold the agent's stdout
+pipe. They redirect it to an append-only NDJSON file inside the sandbox
+(`/tmp/tanstack-runs/<runId>.ndjson`) and tail that instead, so losing the host
+cannot signal the agent and any later reader can replay the run from byte 0.
+
+That path is derived from `runId` alone, and each adapter falls back to a random
+internal id when the caller supplies none. So pass one through:
+
+```ts
+import {
+  chat,
+  chatParamsFromRequest,
+  toServerSentEventsResponse,
+} from '@tanstack/ai'
+import { codexText } from '@tanstack/ai-codex'
+import { withSandbox } from '@tanstack/ai-sandbox'
+import { sandbox } from './sandbox'
+
+export async function POST(request: Request) {
+  const { messages, threadId, runId } = await chatParamsFromRequest(request)
+  const stream = chat({
+    adapter: codexText('gpt-5.3-codex'),
+    messages,
+    threadId,
+    runId, // makes the run's journal findable again
+    middleware: [withSandbox(sandbox)],
+  })
+  return toServerSentEventsResponse(stream)
+}
+```
+
+The id must be unique per run: the journal appends, so reusing one makes a reader
+stop at the previous run's exit sentinel. Full details, including replay against
+an already-delivered log, are in [The Run Journal](./journal).
+
+`opencodeText` and `acpCompatible` harnesses do not read NDJSON off stdout at
+all, so they have no journal.
+
 ## Any ACP agent (`acpCompatible`)
 
 Many coding agents speak the [Agent Client Protocol](https://agentclientprotocol.com)
@@ -68,5 +108,6 @@ and protocol coverage). For which agents you can plug in, browse the official
 ## Where to go next
 
 - **[Providers](./providers)** — where the harness runs (local, Docker, Daytona, Vercel, Sprites).
+- **[The Run Journal](./journal)**: how a run's output survives the host that started it.
 - **[Tools](./tools)** — bridge your app's own tools into the in-sandbox agent.
 - **[Events & File Hooks](./events)** — stream the agent's edits and activity to a UI.

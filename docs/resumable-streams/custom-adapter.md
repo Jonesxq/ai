@@ -50,7 +50,13 @@ Get these wrong and resume breaks in subtle ways:
 - **`snapshot` never waits.** It resolves with whatever is stored right now, in
   append order, even while the run is still producing, and resolves to `[]`
   for a run with nothing stored. Unlike `read`, it does not park: a caller
-  wants to see a previous host's prefix before resuming, not tail the log.
+  wants to see a previous host's prefix before resuming, not tail the log. Get
+  this one wrong and resume hangs on exactly the logs that need it, because a
+  producer that crashed never called `close()`, so its log stays open forever
+  and a `read` over it never finishes. In particular, do not reuse the
+  unknown-run failure path a from-start `read` join takes: `read('-1')` on an
+  empty log may fail, `snapshot()` must resolve to `[]`. Rejecting on a
+  transport, protocol, or authorization failure is still correct.
 
 ## Implement it
 
@@ -151,13 +157,16 @@ is identical; only the wire encoding changes.
 
 ## Re-persisting a stored range
 
-A run driver that restarts mid-run re-derives its position from its own source
-and replays the range it had already streamed. If each replayed chunk lands as a
-fresh entry, the log ends up holding that overlap twice and a resuming client
-replays it twice. Writing a replayed chunk back at the offset it already carries
-is what keeps the log stable across a restart.
+Some stores can write at a key the caller chose. If yours can, you may expose
+that as an extra capability so a caller replaying a range it already streamed can
+land each chunk back on the entry it already occupies.
 
-That capability is a separate method, `upsert`. Implement it and your adapter is
+You do not need it to resume a run. The recommended way to restart mid-run is to
+read the stored prefix with `snapshot()`, suppress it, and `append` only the
+remainder, which keeps the log append-only and works on every adapter. See
+[Resuming a run without duplicating what you already streamed](./advanced#resuming-a-run-without-duplicating-what-you-already-streamed).
+
+The capability is a separate method, `upsert`. Implement it and your adapter is
 an `UpsertableStreamDurability`; leave it out and it is a plain
 `StreamDurability`. Absence is the honest signal: a consumer that needs the
 capability asks for `UpsertableStreamDurability`, so a mismatch is a compile
@@ -239,7 +248,7 @@ export function makeUpsert(
 }
 ```
 
-Hand that to the adapter as `upsert: makeUpsert(log, runId)` alongside the four
+Hand that to the adapter as `upsert: makeUpsert(log, runId)` alongside the five
 methods above, and annotate the result `UpsertableStreamDurability` so the extra
 capability shows up in the type.
 

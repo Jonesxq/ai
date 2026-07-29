@@ -177,6 +177,7 @@ Providers declare what they support via `capabilities()`. The flags are:
 | `ports` | Expose/forward ports (preview URLs). |
 | `backgroundProcesses` | Keep long-running processes alive between calls. |
 | `writableStdin` | A spawned process exposes a writable host→process stdin. `true` for local-process and Docker; `false` on remote/edge providers (Daytona, Vercel, Cloudflare), where stdin-fed harnesses deliver the prompt via a file + shell redirection instead. |
+| `killableProcesses` | A spawned process can be forcibly stopped via `SpawnHandle.kill()` **and** aborted mid-flight via the `signal` passed to `spawn`. |
 | `snapshots` | Capture and restore point-in-time snapshots. |
 | `networkPolicy` | Enforce network allow/deny rules. |
 | `durableFilesystem` | Disk that survives across resumes. |
@@ -204,3 +205,23 @@ if (caps.snapshots) {
 Use the flags to write provider-agnostic code: branch on the capability rather
 than the concrete provider, and your sandbox definition keeps working when you
 swap one provider for another.
+
+### `killableProcesses` across the bundled providers
+
+| Provider | `killableProcesses` | Why |
+| --- | --- | --- |
+| Local process | `true` | Kills the spawned `sh` wrapper **and** its descendants (`taskkill /T` on Windows, signal forwarding elsewhere). |
+| Docker | `true` | Destroys the hijacked exec stream, which tears down the container-side process tied to that exec session. |
+| Daytona | `true` | Deletes the Daytona session, terminating its running command. Bounded by session teardown rather than instant, but terminal. |
+| Vercel | `true` | Aborts the controller threaded into `runCommand`'s own signal; Vercel tears the detached command down. |
+| Sprites | `true` | Delegates to the Sprite exec stream's own `kill()`, which terminates the remote process. |
+| Cloudflare | `false` | `kill()` is a no-op, and the caller's `AbortSignal` reaches neither `exec` nor `spawn`, because Workers RPC cannot serialize one. |
+
+This flag is required on every provider, including a bring-your-own one. A
+provider that omitted it would be treated as killable, which is the dangerous
+default: a follower process started there could never be reclaimed, and it would
+keep running inside the sandbox for as long as the sandbox lives.
+
+It is the flag the [run journal](./journal) reads to decide how to tail a run's
+output: a killable provider gets a streaming `tail -f`, and a provider like
+Cloudflare gets a loop of bounded reads, each of which terminates on its own.

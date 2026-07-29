@@ -67,7 +67,9 @@ export async function POST(request: Request) {
   `UpsertableStreamDurability` fails to compile at the wiring site rather than at
   run time. See
   [Re-persisting a stored range](./custom-adapter#re-persisting-a-stored-range)
-  for adapters that can offer it.
+  for adapters that can offer it. Resuming a run after a producer restart does
+  not need it: see
+  [Resuming a run without duplicating what you already streamed](#resuming-a-run-without-duplicating-what-you-already-streamed).
 
 ## Attaching to a run by id
 
@@ -186,12 +188,53 @@ the `id` of an NDJSON `{ id, chunk }` envelope). For every appended batch:
 Core never derives an offset from an array index and never stamps one onto the
 `StreamChunk`.
 
-A caller that restarts and replays a range it already streamed needs those
-writes to land on the entries they already occupy instead of duplicating them.
-An adapter that can do that adds an `upsert` method and types itself
-`UpsertableStreamDurability`; one that cannot leaves the method out, so code
-requiring the capability does not compile against it. Most integrations never
-ask for it. `memoryStream` offers it, `durableStream` does not (see above). See
+### Resuming a run without duplicating what you already streamed
+
+A producer that restarts mid-run and replays part of its source must not append
+the overlap twice. The client has no safety net below its offset de-dup: a
+re-appended chunk carries a new offset, so `seen` never suppresses it, and the
+stream processor concatenates text deltas and tool-call arguments
+unconditionally. That is duplicated prose and `{"a":1}{"a":1}` arguments, not a
+degraded experience.
+
+The mechanism for it is `snapshot()` plus plain `append`, not caller-chosen
+offsets. Read what the log already holds, compare it against your replay,
+suppress the matching prefix, and append only the remainder:
+
+```ts
+import { memoryStream } from '@tanstack/ai'
+import type { StreamChunk } from '@tanstack/ai'
+
+async function appendAfterStored(
+  request: Request,
+  replayed: Array<StreamChunk>,
+) {
+  const durability = memoryStream(request)
+  const stored = await durability.snapshot()
+  // `snapshot` returns without waiting, even while the log is open, so this
+  // works on a log whose previous producer died without calling `close()`.
+  const remainder = replayed.slice(stored.length)
+  if (remainder.length > 0) await durability.append(remainder)
+}
+```
+
+This is what `@tanstack/ai-sandbox` does for a replayed agent run, comparing by
+a timestamp-insensitive fingerprint rather than by count, and throwing if the
+replay and the log disagree inside the prefix. See
+[The Run Journal](../sandbox/journal) for that path in full.
+
+Because the log stays append-only with adapter-minted offsets, this works on
+`durableStream` too, which is the point: it is the recommended production
+adapter and it has no `upsert`. Two caveats on `durableStream.snapshot()`
+specifically. It is bounded by an internal ceiling on how many windows it will
+pull before giving up on a backend that never reports the reader caught up, and
+it reads from `-1`, so it cannot answer `[]` for a stream the backend never
+created; that is a failed call, not an empty run.
+
+`upsert` remains available as an optional capability for adapters whose store
+can write at a caller-chosen key. Nothing in the resume path above uses it, and
+most integrations never ask for it. `memoryStream` offers it, `durableStream`
+does not (see above). See
 [Re-persisting a stored range](./custom-adapter#re-persisting-a-stored-range) to
 build your own.
 
