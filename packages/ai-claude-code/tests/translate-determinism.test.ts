@@ -46,7 +46,6 @@ import {
   SandboxCapability,
   chunkFingerprint,
   createRunScopedIdGen,
-  journalExistsCommand,
   journalPaths,
 } from '@tanstack/ai-sandbox'
 import { claudeCodeText } from '../src/index'
@@ -275,10 +274,37 @@ function capabilityContextWith(handle: SandboxHandle): CapabilityContext {
 // steers it onto the poll path without touching `@tanstack/ai-sandbox` or
 // the adapter itself — every other operation (fs, process.exec, destroy)
 // still goes through the real local-process sandbox unchanged.
-function pollStrategyHandle(handle: SandboxHandle): SandboxHandle {
+/**
+ * Force the bounded-poll read strategy, and record every command the adapter
+ * spawns so the journal wiring can be asserted from the command itself.
+ *
+ * Recording the command is the only durable way to prove `journal: { runId }`
+ * reached `spawnNdjson`: the journal is deleted once the run reaches its
+ * `{"__exit":N}` sentinel, so by the time this test can look, a correctly
+ * journaled run and an unjournaled one both leave no file behind.
+ */
+function pollStrategyHandle(handle: SandboxHandle): {
+  handle: SandboxHandle
+  spawned: Array<string>
+} {
+  const spawned: Array<string> = []
   return {
-    ...handle,
-    capabilities: { ...handle.capabilities, killableProcesses: false },
+    spawned,
+    handle: {
+      ...handle,
+      capabilities: { ...handle.capabilities, killableProcesses: false },
+      process: {
+        ...handle.process,
+        spawn: (command, options) => {
+          spawned.push(command)
+          return handle.process.spawn(command, options)
+        },
+        exec: (command, options) => {
+          spawned.push(command)
+          return handle.process.exec(command, options)
+        },
+      },
+    },
   }
 }
 
@@ -294,6 +320,7 @@ describe('claude-code chatStream wiring (real adapter, journaled call site)', ()
   it('mints run-scoped message ids and actually journals under the supplied runId', async () => {
     const sbx = await provider.create({})
     await sbx.fs.write('/workspace/fake-claude.mjs', NATIVE_FAKE_CLAUDE)
+    const recorder = pollStrategyHandle(sbx)
 
     // Unique per test run: `journalPaths`'s default directory
     // (`/tmp/tanstack-runs`) is a REAL host path shared across every
@@ -319,7 +346,7 @@ describe('claude-code chatStream wiring (real adapter, journaled call site)', ()
         messages: [{ role: 'user', content: 'say pong' }],
         logger: noopLogger,
         runId,
-        capabilities: capabilityContextWith(pollStrategyHandle(sbx)),
+        capabilities: capabilityContextWith(recorder.handle),
       }),
     )
 
@@ -338,22 +365,23 @@ describe('claude-code chatStream wiring (real adapter, journaled call site)', ()
 
     // Prove `spawnNdjson` was actually invoked with `journal: { runId }` — not
     // merely that the translator happened to receive a run-scoped generator.
-    // The existence check MUST go through the shell (`journalExistsCommand`),
-    // not `sbx.fs.exists`: on `local-process`, `fs.*` resolves `/tmp` under
-    // this sandbox's own `baseDir`, while the journal itself is written by a
-    // raw shell redirect against the REAL host `/tmp` — the two disagree (see
-    // rule 3 in `journal.ts`'s module doc).
+    //
+    // Asserted against the spawned COMMAND rather than the journal file: the
+    // journal is deleted once the run reaches its `{"__exit":N}` sentinel, so a
+    // post-run existence check cannot distinguish a journaled run from an
+    // unjournaled one. The command is unambiguous, and it is also the thing a
+    // regression would actually change.
     const paths = journalPaths(runId)
-    const exists = await sbx.process.exec(journalExistsCommand(paths))
-    expect(exists.exitCode).toBe(0)
+    const journaled = recorder.spawned.filter((command) =>
+      command.includes(paths.journal),
+    )
+    expect(journaled.length).toBeGreaterThan(0)
+    // The agent's own output is redirected into the journal, and the reader
+    // reads that same path back.
+    expect(journaled.some((command) => command.includes('>>'))).toBe(true)
 
-    // Best-effort cleanup of the host-global journal file this run created
-    // (see the `runId` uniqueness note above for why it isn't covered by this
-    // test's own `baseDir`/`afterAll` cleanup).
-    await sbx.process
-      .exec(`rm -f ${paths.journal} ${paths.stderr}`)
-      .catch(() => {})
-
+    // The journal is cleaned up by the reader on the terminal sentinel, so
+    // nothing is left for this test to remove.
     await sbx.destroy()
   })
 })
