@@ -127,6 +127,31 @@ describe('upsert', () => {
     expect(await replay('u-dup')).toEqual(['a'])
   })
 
+  it('rejects a sparse entries array and leaves the log unmutated', async () => {
+    // `Array.prototype.map` SKIPS holes, so planning with it would leave the
+    // plan short and let the apply loop read `undefined` partway through, after
+    // earlier steps had already mutated the log. The plan must therefore be
+    // built with something that visits every index. Do not "simplify" the
+    // planning step back to `entries.map`.
+    //
+    // NB: `memoryStream` keys its log map by runId at module scope, so every
+    // case in this file needs its OWN runId. Reusing one silently inherits the
+    // other's entries.
+    const producer = memoryStream(producerRequest('u-hole'))
+    await producer.append([chunk('a')])
+
+    const sparse: Array<{ chunk: StreamChunk; offset: string }> = []
+    sparse[0] = { chunk: chunk('b'), offset: 'memory:v1:u-hole:2' }
+    sparse[2] = { chunk: chunk('d'), offset: 'memory:v1:u-hole:4' }
+
+    await expect(producer.upsert(sparse)).rejects.toThrow(/entries\[1\]/)
+
+    await producer.close()
+    // `b` sits at index 0, BEFORE the hole. If planning and applying were
+    // interleaved it would already be stored when the hole threw.
+    expect(await replay('u-hole')).toEqual(['a'])
+  })
+
   it('rejects a duplicate of an ALREADY-STORED offset instead of silently dropping a chunk', async () => {
     // The dangerous shape of finding 1: without an intra-batch duplicate check
     // both entries take the replace path, the second overwrites the first, and

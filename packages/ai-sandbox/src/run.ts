@@ -130,11 +130,36 @@ interface FinishContext {
  *   is returned instead. It is also preferred outright when `update` failed,
  *   since the store then still holds the stale `running` row.
  */
+/**
+ * Report through a consumer-supplied logger without letting it break the
+ * caller. Every logger call in this module sits inside a `catch` body, so an
+ * throwing sink would escape that body and defeat the totality the guards
+ * exist to provide. Swallowing here is deliberate: there is no second channel
+ * left to report a reporting failure on.
+ */
+function safeLog(
+  logger: InternalLogger | undefined,
+  message: string,
+  context: Record<string, unknown>,
+): void {
+  try {
+    logger?.errors(message, context)
+  } catch {
+    // Intentionally empty: see above.
+  }
+}
+
 async function finish(
   ctx: FinishContext,
   status: TerminalRunStatus,
   error?: RunError,
 ): Promise<RunRecord> {
+  // NOTE: every logger call below goes through `safeLog`. The logger is
+  // consumer-supplied and is handed arbitrary thrown values, so a sink that
+  // cannot serialize one (a circular payload, say) would otherwise throw from
+  // inside a `catch` body and escape, skipping `durability.close()` and leaving
+  // the run wedged at `'running'` with live tailers parked. The reporting
+  // channel must never be able to break the guarantee it exists to report on.
   const { runs, durability, runId, logger } = ctx
   const finishedAt = Date.now()
   const patch = {
@@ -154,7 +179,7 @@ async function finish(
     await runs.update(runId, patch)
   } catch (updateError) {
     recorded = false
-    logger?.errors('run: recording the terminal run record failed', {
+    safeLog(logger, 'run: recording the terminal run record failed', {
       runId,
       status,
       error: updateError,
@@ -164,7 +189,7 @@ async function finish(
   try {
     await durability.close()
   } catch (closeError) {
-    logger?.errors('run: closing the run event log failed', {
+    safeLog(logger, 'run: closing the run event log failed', {
       runId,
       status,
       error: closeError,
@@ -176,12 +201,12 @@ async function finish(
   try {
     const latest = await runs.get(runId)
     if (latest !== null) return latest
-    logger?.errors('run: record vanished before the terminal re-read', {
+    safeLog(logger, 'run: record vanished before the terminal re-read', {
       runId,
       status,
     })
   } catch (getError) {
-    logger?.errors('run: re-reading the terminal run record failed', {
+    safeLog(logger, 'run: re-reading the terminal run record failed', {
       runId,
       status,
       error: getError,
@@ -238,7 +263,13 @@ export async function pipeToRunLog(
     // Detached run: no caller to throw to. Record the failure in the log so
     // tailing clients observe it, then return — do NOT rethrow.
     let recorded = toRunError(streamError)
-    logger?.errors('run: the run stream failed', { runId, error: streamError })
+    // Deliberately not "the stream failed": `runs.createOrResume` above is
+    // inside this `try`, so an operator reading a wedged run must not be told
+    // the provider stream broke when the store never let the run start.
+    safeLog(logger, 'run: the run failed before completing', {
+      runId,
+      error: streamError,
+    })
     try {
       await durability.append([syntheticRunError(recorded)])
     } catch (appendError) {
@@ -246,7 +277,7 @@ export async function pipeToRunLog(
       // cause it was recording, so the provider's error stays primary and this
       // secondary failure is merged in and logged separately.
       const phase = 'appending the synthesized RUN_ERROR failed'
-      logger?.errors(`run: ${phase}`, { runId, error: appendError })
+      safeLog(logger, `run: ${phase}`, { runId, error: appendError })
       recorded = withSecondaryFailure(recorded, appendError, phase)
     }
     return finish(ctx, 'failed', recorded)

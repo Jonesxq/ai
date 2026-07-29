@@ -92,10 +92,19 @@ Import from either; the recipes in this skill import from
 Three methods are required. Three are optional: implement only the ones your
 backend needs, and leave the rest off the object entirely (not `undefined`,
 just absent). The middleware feature-detects each with `store.method?.(...)`
-and degrades to "not supported" when a method is missing. The conformance
-testkit does the same: it skips the assertions for an optional method a
-backend does not implement, so a three-method `RunStore` is a fully valid,
-fully tested backend.
+and degrades to "not supported" when a method is missing. A three-method
+`RunStore` is a fully valid backend.
+
+The conformance testkit does not feature-detect. An optional method that is
+missing and not declared in `skipMethods` fails the suite, so an omission is
+always a choice you made on purpose rather than a check that quietly did not
+run. Declare yours and the suite reports them as skipped with a reason:
+
+```ts
+runPersistenceConformance('sqlite', () => ({ persistence }), {
+  skipMethods: ['runs.listByThread', 'runs.listReclaimable'],
+})
+```
 
 ```ts
 interface RunStore {

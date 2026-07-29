@@ -321,6 +321,34 @@ describe('pipeToRunLog failure absorption', () => {
     )
   })
 
+  it('still terminalizes when the logger itself throws', async () => {
+    // The logger is consumer-supplied and is handed arbitrary thrown values, so
+    // a sink that cannot serialize one would throw from inside a `catch` body
+    // and escape it. That would skip `durability.close()` and wedge the record
+    // at `running`, defeating the totality the logger exists to report on.
+    const runs = new InMemoryRunStore()
+    runs.update = () => {
+      throw new Error('store update failed')
+    }
+    const { durability, calls } = recordingDurability('f-log')
+    const exploding = {
+      errors: () => {
+        throw new Error('logger sink exploded')
+      },
+    } as unknown as Parameters<typeof pipeToRunLog>[1]['logger']
+
+    const record = await pipeToRunLog(twoChunks(), {
+      runs,
+      durability,
+      logger: exploding,
+      runId: 'f-log',
+      threadId: 't1',
+    })
+
+    expect(calls.closes).toBe(1)
+    expect(record.status).toBe('completed')
+  })
+
   it('resolves and logs when durability.close() itself throws', async () => {
     const runs = new InMemoryRunStore()
     const { durability, calls } = recordingDurability('f2', {
@@ -392,7 +420,8 @@ describe('pipeToRunLog failure absorption', () => {
     expect(record.status).toBe('failed')
     expect(record.error?.message).toContain('store create failed')
     expect(calls.closes).toBe(1)
-    expect(loggedError(logs, 'the run stream failed')).toBe(true)
+    // Not "the stream failed": createOrResume threw, so the stream never ran.
+    expect(loggedError(logs, 'the run failed before completing')).toBe(true)
 
     // The synthesized RUN_ERROR still reached the log, so a tailer sees why.
     const types = (await replay('f4')).map((chunk) => chunk.type)

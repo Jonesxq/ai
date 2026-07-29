@@ -101,8 +101,10 @@ The invariants are the whole game, whichever route you take:
 | `metadata`   | reject nullish `set` with a clear `TypeError`; tell callers to use `delete`                                                                                                                        |
 
 On `runs`, `findActiveRun`, `listByThread`, and `listReclaimable` are optional
-methods. Implement only the ones the app needs; the middleware and the
-conformance testkit both feature-detect them and skip what is missing.
+methods. Implement only the ones the app needs: the middleware feature-detects
+them and degrades to "not supported" when one is absent. The conformance
+testkit does not. Any you leave out must be listed in `skipMethods` or the
+suite fails, so declare them and it reports the omission as a skip.
 
 `RunRecord.error` is a structured `RunError` (`{ message: string, code?: string }`),
 so the table gets two columns rather than one JSON blob: `error` for the

@@ -40,13 +40,15 @@ export interface StreamDurability<TOffset extends string = string> {
  *   requiring the capability asks for `UpsertableStreamDurability` and a
  *   mismatch is a compile error rather than a runtime failure buried in a
  *   run log.
- * - Pairing each chunk with its offset structurally makes a length mismatch,
- *   a sparse hole, and an unpaired chunk unrepresentable.
+ * - Pairing each chunk with its offset structurally makes a length mismatch
+ *   and an unpaired chunk unrepresentable. A sparse hole is still
+ *   representable, so implementations must reject one explicitly.
  *
  * Implementations MUST validate the entire batch before mutating any stored
  * state (so a rejected call never partially applies), MUST reject an offset
- * they did not mint themselves — every accepted offset is resumable by
- * definition — and MUST reject an offset repeated within one batch.
+ * they did not mint themselves (every accepted offset is resumable by
+ * definition), MUST reject an offset repeated within one batch, and MUST
+ * reject a hole in the entries array.
  */
 export interface UpsertableStreamDurability<
   TOffset extends string = string,
@@ -303,7 +305,18 @@ export function memoryStream(
       // Tail as it will stand once every push planned so far has been applied,
       // so intra-batch ordering is validated up front too.
       let plannedTailSeq = tailSeq
-      const plan = entries.map(({ chunk, offset }, index): UpsertStep => {
+      // `Array.from` rather than `entries.map`: `map` SKIPS holes in a sparse
+      // array, which would leave the plan short and make the apply loop below
+      // read `undefined` partway through, after earlier steps had already
+      // mutated the log. `Array.from` invokes this callback for every index,
+      // so a hole is rejected here, before anything is touched.
+      const plan = Array.from(entries, (entry, index): UpsertStep => {
+        if (entry === undefined) {
+          throw new Error(
+            `memoryStream: entries[${index}] is missing; entries must be dense`,
+          )
+        }
+        const { chunk, offset } = entry
         let decoded: MemoryOffset
         try {
           decoded = decodeMemoryOffset(offset)
@@ -324,7 +337,7 @@ export function memoryStream(
           )
         }
         seen.add(offset)
-        const existing = log.entries.find((entry) => entry.offset === offset)
+        const existing = log.entries.find((stored) => stored.offset === offset)
         if (existing) return { kind: 'replace', existing, chunk }
         // A not-yet-stored offset must sit strictly after the current tail.
         // `read()` walks `entries` in array order and filters `seq > threshold`,
@@ -355,7 +368,9 @@ export function memoryStream(
         }
       }
       wakeWaiters(log)
-      return entries.map((entry) => entry.offset)
+      return plan.map((step) =>
+        step.kind === 'replace' ? step.existing.offset : step.offset,
+      )
     },
     close: () => {
       const log = getOrCreateLog(runId)
