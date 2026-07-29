@@ -4,6 +4,7 @@ import { BaseTextAdapter } from '@tanstack/ai/adapters'
 import {
   SandboxCapability,
   createBridgeEventChannel,
+  createRunScopedIdGen,
   getSandbox,
   getSandboxPolicy,
   getToolBridgeProvisioner,
@@ -205,6 +206,14 @@ export class CodexTextAdapter<
     let bridge: HostToolBridge | undefined
     const tempFiles: Array<string> = []
     let cleanupSandbox: SandboxHandle | undefined
+    // Durability caveat: the journaled path below derives its journal file
+    // path from `runId` alone (see `journalPaths` in `@tanstack/ai-sandbox`),
+    // and a successor host must recompute that same path to resume this run.
+    // That is only possible when the caller supplies a stable `runId`. When
+    // `options.runId` is absent, this falls back to `this.generateId()` — a
+    // fresh random id every call — and no future host can derive the journal
+    // path for a run started this way. Do not change this fallback; the
+    // caller-supplied-runId requirement is a Phase 3 concern, not this one.
     const runId = options.runId ?? this.generateId()
     const threadId = options.threadId ?? this.generateId()
     // Surfaces custom events from bridged tools (e.g. code mode console logs)
@@ -297,12 +306,34 @@ export class CodexTextAdapter<
           logger.provider(`provider=codex non-json line: ${line}`, {
             chunk: line,
           }),
+        // Route stdout through the in-sandbox journal so a resuming host can
+        // re-read it from byte 0 (see `@tanstack/ai-sandbox`'s journal.ts).
+        // Only `runId` — no `attach` — is wired here: Phase 3 owns takeover.
+        journal: { runId },
       })
 
       async function* asEvents(): AsyncIterable<CodexThreadEvent> {
         for await (const event of rawEvents) yield event as CodexThreadEvent
       }
 
+      // Deterministic, run-scoped ids: journal replay re-translates the same
+      // journal bytes, and `this.generateId()` (Date.now() + Math.random())
+      // would mint different message ids on every replay. See
+      // chunk-identity.ts in `@tanstack/ai-sandbox` for why this is required.
+      const genId = createRunScopedIdGen(runId)
+
+      // NOTE ON WHAT DETERMINISM HERE DOES NOT COVER: `mergeChunkStreams`
+      // below interleaves `translateThreadEvents`'s deterministic output with
+      // `channel.stream`, which carries host-tool-bridge CUSTOM events
+      // produced by *live* tool execution (see `createBridgeEventChannel`
+      // above). On a journal replay, no live tools run, so those bridged
+      // events do not occur at all — and even when they did occur on the
+      // original run, their interleaving position relative to the translated
+      // chunks is timing-dependent, not derivable from the journal. So making
+      // `translateThreadEvents` deterministic does NOT make the stream this
+      // adapter actually delivers (post-merge) deterministic for a run that
+      // used bridged tools. This is a real gap in the replay story, not
+      // something Phase 2 fixes — see translate-determinism.test.ts.
       yield* mergeChunkStreams(
         translateThreadEvents(asEvents(), {
           model: this.model,
@@ -311,7 +342,7 @@ export class CodexTextAdapter<
           ...(options.parentRunId !== undefined && {
             parentRunId: options.parentRunId,
           }),
-          genId: () => this.generateId(),
+          genId,
           onThreadEvent: (event) =>
             logger.provider(`provider=codex type=${event.type}`, {
               chunk: event,
