@@ -82,6 +82,9 @@ function fixedOffsetDurability(
     async *read() {
       // No replay is needed by these validation tests.
     },
+    // The fixed `offsets` are handed back verbatim by `append` and never
+    // stored, so there is nothing to report for a point-in-time read.
+    snapshot: () => Promise.resolve([]),
   }
 }
 
@@ -130,6 +133,9 @@ describe('toServerSentEventsResponse with durability', () => {
       async *read() {
         // Not exercised by this test.
       },
+      // `append` synthesizes offsets and never stores the chunks, so there
+      // is no state to snapshot.
+      snapshot: () => Promise.resolve([]),
     }
     const errorLog = vi.fn()
     const logger = {
@@ -528,6 +534,9 @@ describe('durability producer robustness', () => {
       async *read() {
         // Not exercised.
       },
+      // `append` synthesizes offsets and never stores the chunks, so there
+      // is no state to snapshot.
+      snapshot: () => Promise.resolve([]),
     }
     const stream: AsyncIterable<StreamChunk> = {
       async *[Symbol.asyncIterator]() {
@@ -569,6 +578,9 @@ describe('durability producer robustness', () => {
       async *read() {
         // Not exercised.
       },
+      // `append` synthesizes offsets and never stores the chunks, so there
+      // is no state to snapshot.
+      snapshot: () => Promise.resolve([]),
     }
     const stream: AsyncIterable<StreamChunk> = {
       async *[Symbol.asyncIterator]() {

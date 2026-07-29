@@ -1,7 +1,7 @@
 ---
 title: Custom Durability Adapter
 id: custom-adapter
-description: "Back resumable streams with your own store (Redis, Postgres, a queue) by implementing the four-method StreamDurability contract."
+description: "Back resumable streams with your own store (Redis, Postgres, a queue) by implementing the five-method StreamDurability contract."
 keywords:
   - custom durability adapter
   - StreamDurability
@@ -19,7 +19,7 @@ adapter that plugs into `toServerSentEventsResponse` / `toHttpResponse`, so a
 client can reconnect to an in-flight run without re-running the model.
 
 Core never understands your store. It only round-trips opaque offset strings you
-hand it. You implement four methods:
+hand it. You implement five methods:
 
 | Method | Job |
 | --- | --- |
@@ -27,6 +27,7 @@ hand it. You implement four methods:
 | `append(chunks)` | Persist a batch before delivery; return one offset per chunk, in order. |
 | `read(offset, signal)` | Replay chunks strictly after `offset`. |
 | `close()` | Mark the run complete and wake any parked readers. |
+| `snapshot()` | Return everything stored for this run right now, without waiting. |
 
 ## The rules that matter
 
@@ -46,6 +47,10 @@ Get these wrong and resume breaks in subtle ways:
   stops the wait.
 - You do not handle ordering or append-before-deliver. Core buffers, calls
   `append`, and only forwards a chunk once you return its offset.
+- **`snapshot` never waits.** It resolves with whatever is stored right now, in
+  append order, even while the run is still producing, and resolves to `[]`
+  for a run with nothing stored. Unlike `read`, it does not park: a caller
+  wants to see a previous host's prefix before resuming, not tail the log.
 
 ## Implement it
 
@@ -66,6 +71,8 @@ interface RunLog {
   isComplete: () => Promise<boolean>
   waitForChange: (signal?: AbortSignal) => Promise<void>
   markComplete: () => Promise<void>
+  // Everything stored so far, in append order. Must not wait for more.
+  readAll: () => Promise<Array<{ cursor: string; chunk: StreamChunk }>>
 }
 
 function isTerminal(chunk: StreamChunk): boolean {
@@ -109,6 +116,13 @@ export function customDurability(
         // Park. Do NOT end the response here while the producer is alive.
         await log.waitForChange(signal)
       }
+    },
+    snapshot: async () => {
+      const entries = await log.readAll()
+      return entries.map((entry) => ({
+        offset: entry.cursor,
+        chunk: entry.chunk,
+      }))
     },
   }
 }

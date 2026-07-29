@@ -113,6 +113,9 @@ function recordingDurability(
       faults.close?.()
       return inner.close()
     },
+    // Delegate to the wrapped `memoryStream`, which is the actual store of
+    // record for this fake.
+    snapshot: () => inner.snapshot(),
   }
   return { durability, calls }
 }

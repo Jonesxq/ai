@@ -60,6 +60,7 @@ const sandbox = defineSandbox({
       ports: false,
       backgroundProcesses: false,
       writableStdin: false,
+      killableProcesses: false,
       snapshots: false,
       networkPolicy: false,
       durableFilesystem: false,
