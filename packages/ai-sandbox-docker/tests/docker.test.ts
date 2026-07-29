@@ -92,5 +92,45 @@ describe.skipIf(!dockerAvailable)(
         await def.destroy(ctx)
       }
     }, 120_000)
+
+    it('reassembles a multi-byte character split across spawn stdout chunk boundaries', async () => {
+      const provider = dockerSandbox({ image: IMAGE })
+      let sbx: SandboxHandle | undefined
+      try {
+        sbx = await provider.create({})
+        // '€' = 0xE2 0x82 0xAC (octal \342 \202 \254). Emit the first byte,
+        // sleep, then the remaining bytes — forcing the container's exec
+        // stream to deliver them as separate chunks, reproducing a
+        // multi-byte character split across a chunk boundary.
+        const proc = await sbx.process.spawn(
+          `printf '\\342'; sleep 0.3; printf '\\202\\254lo'`,
+        )
+        let out = ''
+        for await (const chunk of proc.stdout) out += chunk
+        await proc.wait()
+        expect(out).toBe('€lo')
+        expect(out).not.toContain('�')
+      } finally {
+        await sbx?.destroy()
+      }
+    }, 120_000)
+
+    it('flushes a genuinely truncated trailing UTF-8 sequence at end of stream (as U+FFFD, not silently dropped)', async () => {
+      const provider = dockerSandbox({ image: IMAGE })
+      let sbx: SandboxHandle | undefined
+      try {
+        sbx = await provider.create({})
+        // Only the first byte of a 3-byte sequence is ever written.
+        const proc = await sbx.process.spawn(`printf '\\342'`)
+        let out = ''
+        for await (const chunk of proc.stdout) out += chunk
+        await proc.wait()
+        // Decision: flush at end-of-stream surfaces the truncated sequence
+        // as the replacement character, rather than silently dropping it.
+        expect(out).toBe('�')
+      } finally {
+        await sbx?.destroy()
+      }
+    }, 120_000)
   },
 )

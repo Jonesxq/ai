@@ -112,11 +112,28 @@ export const LOCAL_PROCESS_CAPS: SandboxCapabilities = {
   fork: true,
 }
 
+/**
+ * Decode spawn stdout/stderr as a byte stream, not chunk-by-chunk. A naive
+ * per-chunk `Buffer.toString('utf8')` corrupts any multi-byte UTF-8 character
+ * that a Node stream happens to split across two `data` events — each half
+ * decodes independently into a replacement character. A streaming
+ * `TextDecoder` retains a partial trailing sequence across `decode()` calls
+ * (`{ stream: true }`) and only emits it once the full character has
+ * arrived. We flush (`decoder.decode()` with no args) once the stream ends
+ * so a genuinely truncated trailing sequence is still surfaced (as U+FFFD)
+ * rather than silently dropped — matching the pattern already used in
+ * `ai-sandbox-sprites`'s `client.ts`.
+ */
 async function* decodeStream(stream: Readable | null): AsyncIterable<string> {
   if (!stream) return
+  const decoder = new TextDecoder('utf-8')
   for await (const chunk of stream) {
-    yield typeof chunk === 'string' ? chunk : (chunk as Buffer).toString('utf8')
+    yield typeof chunk === 'string'
+      ? chunk
+      : decoder.decode(chunk as Buffer, { stream: true })
   }
+  const tail = decoder.decode()
+  if (tail !== '') yield tail
 }
 
 /**

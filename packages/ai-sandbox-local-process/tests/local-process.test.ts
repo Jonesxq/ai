@@ -121,6 +121,56 @@ describe('local-process + spawnNdjson (real agent-CLI streaming)', () => {
   })
 })
 
+describe('local-process spawn stdout — UTF-8 decoding', () => {
+  it('reassembles a multi-byte character split across chunk boundaries', async () => {
+    const sbx = await fresh()
+    await sbx.fs.write(
+      '/workspace/split-utf8.mjs',
+      [
+        // '€' = 0xE2 0x82 0xAC (3 bytes). Write byte 1 alone, then the
+        // remaining bytes after a delay so the pipe reader on the other end
+        // almost certainly delivers them as separate `data` events —
+        // reproducing a multi-byte character split across a chunk boundary.
+        `const euro = Buffer.from('€', 'utf8')`,
+        `process.stdout.write(euro.subarray(0, 1))`,
+        `setTimeout(() => {`,
+        `  process.stdout.write(euro.subarray(1))`,
+        `  process.stdout.write('lo')`,
+        `}, 50)`,
+      ].join('\n'),
+    )
+    const proc = await sbx.process.spawn('node split-utf8.mjs', {
+      cwd: '/workspace',
+    })
+    let out = ''
+    for await (const chunk of proc.stdout) out += chunk
+    await proc.wait()
+    expect(out).toBe('€lo')
+    expect(out).not.toContain('�')
+    await sbx.destroy()
+  })
+
+  it('flushes a genuinely truncated trailing sequence at end of stream (as U+FFFD, not silently dropped)', async () => {
+    const sbx = await fresh()
+    await sbx.fs.write(
+      '/workspace/truncated-utf8.mjs',
+      // Write only the first byte of a 3-byte UTF-8 sequence, then exit —
+      // the continuation bytes never arrive.
+      `process.stdout.write(Buffer.from('€', 'utf8').subarray(0, 1))`,
+    )
+    const proc = await sbx.process.spawn('node truncated-utf8.mjs', {
+      cwd: '/workspace',
+    })
+    let out = ''
+    for await (const chunk of proc.stdout) out += chunk
+    await proc.wait()
+    // Decision: flush at end-of-stream surfaces the truncated sequence as the
+    // replacement character, rather than silently dropping it.
+    expect(out).toBe('�')
+    await sbx.destroy()
+  })
+})
+
 describe('local-process lifecycle', () => {
   it('resume returns a handle for an existing dir, null otherwise', async () => {
     const sbx = await fresh()
