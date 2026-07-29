@@ -10,6 +10,7 @@ import {
 import {
   SandboxCapability,
   createBridgeEventChannel,
+  createRunScopedIdGen,
   getSandbox,
   getSandboxPolicy,
   getToolBridgeProvisioner,
@@ -436,6 +437,11 @@ export class GrokBuildTextAdapter<
       const sandbox = this.sandboxFrom(options)
       const cwd = this.workdir(options)
       const harnessCwd = this.harnessCwd(sandbox, options)
+      // Durability (journaled replay producing identical chunks) requires a
+      // caller-supplied `runId`. Without one, this falls back to a random id
+      // that no successor host can recompute, so the journal path below is
+      // still wired up but a resuming host has no way to find this run's
+      // journal file. Do not change this fallback.
       const runId = options.runId ?? this.generateId()
       const threadId = options.threadId ?? this.generateId()
 
@@ -507,11 +513,17 @@ export class GrokBuildTextAdapter<
           logger.provider(`provider=grok-build non-json line: ${line}`, {
             chunk: line,
           }),
+        journal: { runId },
       })
 
       async function* asEvents(): AsyncIterable<GrokBuildStreamEvent> {
         for await (const event of rawEvents) yield event as GrokBuildStreamEvent
       }
+
+      // Deterministic message ids (no clock, no randomness) so that
+      // re-translating the same journaled bytes on a resuming host produces
+      // the same chunk sequence. See `chunk-identity.ts` for why this matters.
+      const genId = createRunScopedIdGen(runId)
 
       yield* translateThreadEvents(asEvents(), {
         model: this.model,
@@ -520,7 +532,7 @@ export class GrokBuildTextAdapter<
         ...(options.parentRunId !== undefined && {
           parentRunId: options.parentRunId,
         }),
-        genId: () => this.generateId(),
+        genId,
         onThreadEvent: (event) =>
           logger.provider(`provider=grok-build type=${event.type}`, {
             chunk: event,
