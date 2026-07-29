@@ -463,6 +463,25 @@ optional `RunStore` method, declare the omission when running the conformance
 testkit (`ai-persistence/stores`'s `skipMethods` option) rather than leaving it
 undeclared.
 
+### `StreamDurability.snapshot()`
+
+A `StreamDurability` (the event-log backend `memoryStream` / `durableStream`
+implement, and what `RunController` in `@tanstack/ai-sandbox` is constructed
+with) requires a `snapshot()` method alongside `append`, `read`, and `close`:
+
+```ts
+snapshot: () => Promise<Array<{ offset: TOffset; chunk: StreamChunk }>>
+```
+
+It returns everything stored for a run right now, in append order, then
+resolves. Use it, not `read()`, when a caller needs to inspect a run's stored
+prefix and get an answer back: `read()` tails and only resolves once the log
+is terminalized with `close()` or the caller aborts, so it never resolves
+against a producer that crashed without calling `close()`, and its log stays
+open indefinitely. `snapshot()` resolves immediately with what is stored,
+including while the log is still open, and resolves to an empty array for a
+run with nothing stored yet.
+
 **Full guidance lives in the package's own skills** — start at
 `node_modules/@tanstack/ai-persistence/skills/ai-persistence/SKILL.md`,
 which routes to the server, client, stores, locks, and adapter-recipe
