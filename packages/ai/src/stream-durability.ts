@@ -25,6 +25,36 @@ export interface StreamDurability<TOffset extends string = string> {
    * for every producer exit, including completion, cancellation, and failure.
    */
   close: () => Promise<void>
+  /**
+   * Everything stored for this run **at the moment of the call**, in append
+   * order, then resolve.
+   *
+   * This is the bounded counterpart to {@link StreamDurability.read}. `read`
+   * tails: it parks until the log is terminalized or the caller aborts, so it
+   * cannot be used to inspect a log whose producer died without calling
+   * `close` — that log stays open forever and a `for await` over it never
+   * finishes. `snapshot` exists for exactly that case: a producer resuming a
+   * run needs to see the prefix a previous host already stored so it can line
+   * its own output up against it, and it needs that read to *return*.
+   *
+   * Implementations MUST:
+   *
+   * - never wait for more entries — resolve with what is stored, including
+   *   while the log is still open and still being appended to;
+   * - resolve to an empty array for a run with nothing stored, rather than
+   *   throwing. In particular an implementation must not reuse the
+   *   unknown-run failure path a from-start `read` join takes (`read('-1')` on
+   *   an empty log is allowed to fail; `snapshot()` is not). A backend over a
+   *   network may of course still reject on a transport, protocol, or
+   *   authorization failure — that is a failed call, not an empty run;
+   * - return a fresh array the caller can keep or mutate without reaching the
+   *   stored log through it.
+   *
+   * The result is a point-in-time view and carries no lock: a concurrent
+   * `append` may land immediately after the snapshot is taken, so a caller
+   * must not treat the last returned offset as the permanent tail.
+   */
+  snapshot: () => Promise<Array<{ offset: TOffset; chunk: StreamChunk }>>
 }
 
 /**
@@ -370,6 +400,23 @@ export function memoryStream(
       wakeWaiters(log)
       return plan.map((step) =>
         step.kind === 'replace' ? step.existing.offset : step.offset,
+      )
+    },
+    snapshot: () => {
+      // Peek, never getOrCreateLog: an unknown run must resolve to `[]`, and
+      // inserting an empty, never-completed log here would leave a permanent
+      // entry the sweep cannot reclaim (it only reclaims complete logs).
+      const log = memoryLogs.get(runId)
+      if (log === undefined) return Promise.resolve([])
+      // Fresh outer array AND fresh pair objects, so a caller that mutates the
+      // result cannot reach `log.entries` or the stored entries through it.
+      // Never touches `log.waiters` — a snapshot is a point-in-time read and
+      // returns even while the log is open and still being appended to.
+      return Promise.resolve(
+        log.entries.map((entry) => ({
+          offset: entry.offset,
+          chunk: entry.chunk,
+        })),
       )
     },
     close: () => {

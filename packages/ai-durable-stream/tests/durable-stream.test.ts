@@ -1123,6 +1123,125 @@ describe('durableStream official HTTP protocol', () => {
   })
 })
 
+describe('durableStream snapshot', () => {
+  function getCount(server: ReturnType<typeof makeProtocolServer>) {
+    return server.requests.filter((request) => request.method === 'GET').length
+  }
+
+  it('resolves to an empty array for a run with nothing stored', async () => {
+    const server = makeProtocolServer()
+    const durability = durableStream(
+      new Request('https://app.test/api/chat?runId=run-snapshot-empty'),
+      { server: 'https://ds.test', fetch: server.fetchStub },
+    )
+
+    await expect(durability.snapshot()).resolves.toEqual([])
+    // One bounded backend read, not a poll loop.
+    expect(getCount(server)).toBe(1)
+  })
+
+  it('returns everything stored, in order, while the stream is still open', async () => {
+    const server = makeProtocolServer()
+    const durability = durableStream(
+      new Request('https://app.test/api/chat?runId=run-snapshot-open'),
+      { server: 'https://ds.test', fetch: server.fetchStub },
+    )
+    await durability.append([textChunk('a'), textChunk('b')])
+    await durability.append([textChunk('c')])
+
+    // No close(): the stream is open, so `read` would keep long-polling. The
+    // snapshot stops at the first control frame reporting the reader caught up.
+    const entries = await durability.snapshot()
+    expect(
+      entries.map((entry) =>
+        entry.chunk.type === EventType.TEXT_MESSAGE_CONTENT
+          ? entry.chunk.delta
+          : entry.chunk.type,
+      ),
+    ).toEqual(['a', 'b', 'c'])
+    expect(new Set(entries.map((entry) => entry.offset)).size).toBe(3)
+    // Two windows at most: the stored batches, then the caught-up control.
+    expect(getCount(server)).toBeLessThanOrEqual(2)
+
+    // Point-in-time: a later append shows up in the NEXT snapshot.
+    await durability.append([textChunk('d')])
+    expect(await durability.snapshot()).toHaveLength(4)
+  })
+
+  it('still returns the entries after close', async () => {
+    const server = makeProtocolServer()
+    const durability = durableStream(
+      new Request('https://app.test/api/chat?runId=run-snapshot-closed'),
+      { server: 'https://ds.test', fetch: server.fetchStub },
+    )
+    await durability.append([textChunk('a'), textChunk('b')])
+    await durability.close()
+
+    const entries = await durability.snapshot()
+    expect(entries.map((entry) => deltaFrom(entry.chunk))).toEqual(['a', 'b'])
+    expect(getCount(server)).toBe(1)
+  })
+
+  it('returns a fresh array the caller cannot corrupt a later read through', async () => {
+    const server = makeProtocolServer()
+    const durability = durableStream(
+      new Request('https://app.test/api/chat?runId=run-snapshot-copy'),
+      { server: 'https://ds.test', fetch: server.fetchStub },
+    )
+    await durability.append([textChunk('a'), textChunk('b')])
+
+    const first = await durability.snapshot()
+    const second = await durability.snapshot()
+    expect(second).not.toBe(first)
+    first.length = 0
+    const target = second[0]
+    if (!target) throw new Error('Expected a stored entry')
+    target.chunk = textChunk('clobbered')
+
+    const third = await durability.snapshot()
+    expect(third.map((entry) => deltaFrom(entry.chunk))).toEqual(['a', 'b'])
+
+    await durability.close()
+    const replayed: Array<string> = []
+    for await (const { chunk } of durability.read('-1')) {
+      replayed.push(deltaFrom(chunk))
+    }
+    expect(replayed).toEqual(['a', 'b'])
+  })
+
+  it('caps the windows it will pull when a backend never reports upToDate', async () => {
+    let readNumber = 0
+    const fetchStub = vi.fn<typeof fetch>(async (_input, init) => {
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (method !== 'GET') {
+        return new Response(null, {
+          status: 200,
+          headers: createHeaders('origin::p/A'),
+        })
+      }
+      readNumber += 1
+      // Always advances, never says upToDate and never closes — the exact shape
+      // that would make an unbounded snapshot poll without end.
+      return new Response(
+        controlEvent({
+          streamNextOffset: `opaque::window/${readNumber}`,
+          streamCursor: `collapse::${readNumber}`,
+        }),
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+      )
+    })
+    const durability = durableStream(
+      new Request('https://app.test/api/chat?runId=run-snapshot-uncapped'),
+      { server: 'https://ds.test', fetch: fetchStub },
+    )
+
+    await expect(durability.snapshot()).rejects.toThrow(/without the backend/)
+    // The ceiling is checked before the fetch, so exactly SNAPSHOT_MAX_WINDOWS
+    // reads happen and the 1001st attempt throws.
+    expect(readNumber).toBe(1000)
+  })
+})
+
 describe('durableStream exact-once resume', () => {
   it('resumes mid-way through a coalesced data batch without gaps or duplicates', async () => {
     const server = makeProtocolServer({
