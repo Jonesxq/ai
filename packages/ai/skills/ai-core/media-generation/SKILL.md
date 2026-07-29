@@ -567,7 +567,7 @@ returns `usage` and emits a `video:usage` devtools event when fal reports it.
 
 To make generations survive a server restart and be re-served later, add
 `withGenerationPersistence` from `@tanstack/ai-persistence` as generation
-middleware. It requires `stores.jobs` (a `GenerationJobStore`, keyed on `jobId` —
+middleware. It requires `stores.generationRuns` (a `GenerationRunStore`, keyed on the run's own `runId` —
 not a chat `threadId`) and, when you also pass an `stores.artifacts` +
 `stores.blobs` **pair** (both or neither), it persists the generated media bytes
 at blob key `artifacts/<runId>/<artifactId>` with an `ArtifactRecord` per file.

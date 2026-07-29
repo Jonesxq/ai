@@ -19,7 +19,7 @@ import type {
   ChatPersistence,
   ChatTranscriptPersistence,
   ChatTranscriptStores,
-  GenerationJobStore,
+  GenerationRunStore,
   InterruptStore,
   MessageStore,
   MetadataStore,
@@ -36,7 +36,7 @@ declare const replacementRuns: RunStore & {
 }
 declare const interrupts: InterruptStore
 declare const metadata: MetadataStore
-declare const jobs: GenerationJobStore
+declare const generationRuns: GenerationRunStore
 declare const locks: LockStore
 
 const messagesOnly = defineAIPersistence({ stores: { messages } })
@@ -132,7 +132,7 @@ expectTypeOf(memoryPersistence()).toEqualTypeOf<
   AIPersistence<{
     messages: MessageStore
     runs: RunStore
-    jobs: GenerationJobStore
+    generationRuns: GenerationRunStore
     interrupts: InterruptStore
     metadata: MetadataStore
     artifacts: ArtifactStore
@@ -152,9 +152,9 @@ withPersistence(defineAIPersistence({ stores: { runs } }))
 // @ts-expect-error a known interrupt store requires a known run store
 withPersistence(defineAIPersistence({ stores: { interrupts, messages } }))
 
-// Generation requires jobs
-withGenerationPersistence(defineAIPersistence({ stores: { jobs } }))
-// @ts-expect-error generation persistence requires jobs
+// Generation requires generationRuns
+withGenerationPersistence(defineAIPersistence({ stores: { generationRuns } }))
+// @ts-expect-error generation persistence requires generationRuns
 withGenerationPersistence(messagesOnly)
 // @ts-expect-error a runs store alone does not satisfy generation persistence
 withGenerationPersistence(defineAIPersistence({ stores: { runs } }))

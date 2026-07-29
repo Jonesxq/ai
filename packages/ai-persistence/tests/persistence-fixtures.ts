@@ -1,6 +1,6 @@
 import type {
-  GenerationJobRecord,
-  GenerationJobStore,
+  GenerationRunRecord,
+  GenerationRunStore,
   InterruptStore,
   MessageStore,
   MetadataStore,
@@ -50,14 +50,14 @@ export function createRunStore(): RunStore {
   }
 }
 
-export function createGenerationJobStore(): GenerationJobStore {
-  const jobs = new Map<string, GenerationJobRecord>()
+export function createGenerationRunStore(): GenerationRunStore {
+  const generationRuns = new Map<string, GenerationRunRecord>()
   return {
     createOrResume: (input) => {
-      const existing = jobs.get(input.jobId)
+      const existing = generationRuns.get(input.runId)
       if (existing) return Promise.resolve(existing)
-      const record: GenerationJobRecord = {
-        jobId: input.jobId,
+      const record: GenerationRunRecord = {
+        runId: input.runId,
         activity: input.activity,
         provider: input.provider,
         model: input.model,
@@ -65,15 +65,15 @@ export function createGenerationJobStore(): GenerationJobStore {
         startedAt: input.startedAt,
         ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
       }
-      jobs.set(record.jobId, record)
+      generationRuns.set(record.runId, record)
       return Promise.resolve(record)
     },
-    update: (jobId, patch) => {
-      const existing = jobs.get(jobId)
-      if (existing) jobs.set(jobId, { ...existing, ...patch })
+    update: (runId, patch) => {
+      const existing = generationRuns.get(runId)
+      if (existing) generationRuns.set(runId, { ...existing, ...patch })
       return Promise.resolve()
     },
-    get: (jobId) => Promise.resolve(jobs.get(jobId) ?? null),
+    get: (runId) => Promise.resolve(generationRuns.get(runId) ?? null),
   }
 }
 

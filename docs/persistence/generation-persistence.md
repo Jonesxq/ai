@@ -27,8 +27,8 @@ Generation persistence mirrors chat's `persistence` option:
   empty.
 
 Either way the server keeps a **generation job** record:
-`withGenerationPersistence(persistence)` needs a `jobs` store (a
-`GenerationJobStore` keyed by the run's `jobId`; a generation has no conversation
+`withGenerationPersistence(persistence)` needs a `generationRuns` store (a
+`GenerationRunStore` keyed by the run's own `runId`; a generation has no conversation
 of its own, so `threadId` is only an optional link). `memoryPersistence()` ships
 one out of the box; see
 [Build your own adapter](./build-your-own-adapter#generation--media-stores) for
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
   const stream = generateImage({
     adapter: openaiImage('gpt-image-2'),
     prompt: input.prompt,
-    // Link the job to the thread so the GET can find the last run for it.
+    // Link the run to the thread so the GET can find the last run for it.
     ...(threadId !== undefined ? { threadId } : {}),
     stream: true,
     // `artifactUrl` makes the restored media render from your own origin. It is

@@ -6,7 +6,7 @@ export {
   defineRunStore,
   defineInterruptStore,
   defineMetadataStore,
-  defineGenerationJobStore,
+  defineGenerationRunStore,
   defineArtifactStore,
   defineBlobStore,
 } from './types'
@@ -26,10 +26,10 @@ export type {
   ChatTranscriptPersistence,
   ChatPersistence,
   ChatWithInterruptsPersistence,
-  // Generation job store contract
-  GenerationJobStatus,
-  GenerationJobRecord,
-  GenerationJobStore,
+  // Generation run store contract
+  GenerationRunStatus,
+  GenerationRunRecord,
+  GenerationRunStore,
   // Generation artifact + blob store contracts
   ArtifactRecord,
   ArtifactStore,

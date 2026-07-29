@@ -722,7 +722,8 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
           )
         : undefined,
     )
-    if (snapshot.result?.jobId) this.setJobId(snapshot.result.jobId)
+    if (snapshot.result?.providerJobId)
+      this.setJobId(snapshot.result.providerJobId)
     const restored = this.reconstructVideoResult(snapshot)
     if (restored !== null) this.setResult(restored)
   }
@@ -743,7 +744,7 @@ export class VideoGenerationClient<TOutput = VideoGenerateResult> {
     )
     if (!output?.url) return null
     return {
-      jobId: result?.jobId ?? '',
+      jobId: result?.providerJobId ?? '',
       status: 'completed',
       url: output.url,
       ...(result?.expiresAt ? { expiresAt: new Date(result.expiresAt) } : {}),

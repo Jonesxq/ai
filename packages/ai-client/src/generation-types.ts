@@ -103,7 +103,12 @@ export interface GenerationResultSnapshot {
   id?: string
   model?: string
   status?: string
-  jobId?: string
+  /**
+   * The provider's async job handle (e.g. a Veo/fal video job id used for
+   * status polling) — NOT the generation's own `runId`, which lives on
+   * {@link GenerationResumeState.runId}.
+   */
+  providerJobId?: string
   expiresAt?: string
   /**
    * The text output of a text activity (a transcription's `text` or a summary's
@@ -346,7 +351,8 @@ export interface GenerationRestoredResult {
   id?: string
   model?: string
   status?: string
-  jobId?: string
+  /** The provider's async job handle — see {@link GenerationResultSnapshot.providerJobId}. */
+  providerJobId?: string
   expiresAt?: string
   text?: string
   usage?: TokenUsage
@@ -406,14 +412,14 @@ export function updateGenerationResumeSnapshot(
         }
       }
     } else if (chunk.name === GENERATION_EVENTS.VIDEO_JOB_CREATED) {
-      // Capture the job id as soon as the job exists — for a long video run
-      // this is the one piece of identity worth having after a reload, and
-      // the terminal `generation:result` may never arrive.
-      const jobId = isObject(chunk.value)
+      // Capture the provider job id as soon as the job exists — for a long
+      // video run this is the one piece of identity worth having after a
+      // reload, and the terminal `generation:result` may never arrive.
+      const providerJobId = isObject(chunk.value)
         ? stringField(chunk.value, 'jobId')
         : undefined
-      if (jobId) {
-        next.result = { ...next.result, jobId }
+      if (providerJobId) {
+        next.result = { ...next.result, providerJobId }
       }
     }
   } else if (chunk.type === 'RUN_FINISHED') {
@@ -693,7 +699,12 @@ export function createGenerationResultSnapshot(
   const id = stringField(value, 'id')
   const model = stringField(value, 'model')
   const status = stringField(value, 'status')
-  const jobId = stringField(value, 'jobId')
+  // A live provider result carries its job handle as `jobId` (e.g.
+  // `VideoGenerateResult.jobId`); a persisted snapshot carries it as
+  // `providerJobId`. Accept both — this narrows raw results AND stored
+  // snapshots.
+  const providerJobId =
+    stringField(value, 'providerJobId') ?? stringField(value, 'jobId')
   // A transcription's output is `text`; a summary's is `summary`. Capture either
   // under `text` so a text result restores on reload.
   const text = stringField(value, 'text') ?? stringField(value, 'summary')
@@ -701,7 +712,7 @@ export function createGenerationResultSnapshot(
   if (id) snapshot.id = id
   if (model) snapshot.model = model
   if (status) snapshot.status = status
-  if (jobId) snapshot.jobId = jobId
+  if (providerJobId) snapshot.providerJobId = providerJobId
   if (text) snapshot.text = text
   // Passthrough opaque token-usage metadata (untrusted; not deeply validated).
   if (isObject(usage)) snapshot.usage = usage as TokenUsage

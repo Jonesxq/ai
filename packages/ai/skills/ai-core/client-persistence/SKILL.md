@@ -126,7 +126,7 @@ transparent, mirroring `useChat`:** whichever mode, a reload repaints the hook's
 extra field is `resumeState`: the in-flight run identity (`{ threadId, runId,
 pendingArtifacts? }`) or `null` — non-null only while a run streams. The
 persisted record holds run identity, status, error, and result metadata (ids,
-model, video `jobId`), **never the generated media bytes**.
+model, a provider video job id), **never the generated media bytes**.
 
 The hook return is exactly `generate` / `result` / `isLoading` / `error` /
 `status` / `stop` / `reset` / `resumeState`.
@@ -174,8 +174,8 @@ const image = useGenerateImage({
   `hydrateGeneration` handler (the SSE/HTTP adapters issue a `GET` with
   `?threadId=` to the same endpoint URL) and repaints it into the normal fields.
 - The server `GET` returns `reconstructGeneration(persistence, request)` from
-  `@tanstack/ai-persistence` — it resolves the job by `?jobId=` (preferred) or
-  the latest job linked to `?threadId=`, and needs `stores.jobs`. Pair it with
+  `@tanstack/ai-persistence` — it resolves the run by `?runId=` (preferred) or
+  the latest run linked to `?threadId=`, and needs `stores.generationRuns`. Pair it with
   `withGenerationPersistence` on the generation route. See
   `ai-core/media-generation` and `ai-persistence`.
 - Best for multi-device / compliance (no generation metadata in browser

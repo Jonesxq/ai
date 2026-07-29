@@ -1,17 +1,17 @@
 import { validateReconstructGenerationStores } from './types'
-import type { AIPersistence, GenerationJobRecord } from './types'
+import type { AIPersistence, GenerationRunRecord } from './types'
 
 /**
  * The JSON body `reconstructGeneration` returns and a server-authoritative
  * client hydrates from on mount.
  *
- * `resumeSnapshot` mirrors the last generation job for the requested thread (or
- * a specific job id): its terminal/running `status`, the `result` metadata and
+ * `resumeSnapshot` mirrors the last generation run for the requested thread (or
+ * a specific run id): its terminal/running `status`, the `result` metadata and
  * `error` it recorded, the `activity` it ran, and a `resumeState` cursor
- * (present only while the job is still `running`) the client can use to tail the
- * live generation. `null` when there is no matching job.
+ * (present only while the run is still `running`) the client can use to tail the
+ * live generation. `null` when there is no matching run.
  *
- * `activeRun` is `{ runId }` when the resolved job is still `running`, else
+ * `activeRun` is `{ runId }` when the resolved run is still `running`, else
  * `null` — the parallel of {@link ReconstructedChat.activeRun}.
  */
 export interface ReconstructedGeneration {
@@ -29,17 +29,17 @@ export interface ReconstructedGeneration {
 export interface ReconstructGenerationOptions {
   /** Query parameter carrying the thread id. Defaults to `threadId`. */
   param?: string
-  /** Query parameter carrying the job id. Defaults to `jobId`. */
-  jobParam?: string
+  /** Query parameter carrying the run id. Defaults to `runId`. */
+  runParam?: string
   /**
    * Authorize access to the requested generation before loading it.
    *
-   * ⚠️ Without this, any caller who knows or guesses `?threadId=` / `?jobId=`
+   * ⚠️ Without this, any caller who knows or guesses `?threadId=` / `?runId=`
    * receives the generation's status and result metadata. Multi-user /
    * multi-tenant deployments **must** supply an authorization check (session →
-   * owned thread/job) or resolve a validated id in the route.
+   * owned thread/run) or resolve a validated id in the route.
    *
-   * Called with whichever id was supplied — the `jobId` when present, else the
+   * Called with whichever id was supplied — the `runId` when present, else the
    * `threadId`. Return:
    * - `true` to allow the load
    * - `false` for a default `403` response
@@ -52,12 +52,12 @@ export interface ReconstructGenerationOptions {
 }
 
 /**
- * Map the persisted job status to the client-facing resume-snapshot status.
- * An `interrupted` job surfaces as `error` — the client has no live run to
+ * Map the persisted run status to the client-facing resume-snapshot status.
+ * An `interrupted` run surfaces as `error` — the client has no live run to
  * resume, and an interrupted generation produced no usable result.
  */
 function snapshotStatus(
-  status: GenerationJobRecord['status'],
+  status: GenerationRunRecord['status'],
 ): 'running' | 'complete' | 'error' {
   switch (status) {
     case 'running':
@@ -70,23 +70,23 @@ function snapshotStatus(
   }
 }
 
-function jobToSnapshot(
-  job: GenerationJobRecord,
+function runToSnapshot(
+  run: GenerationRunRecord,
 ): NonNullable<ReconstructedGeneration['resumeSnapshot']> {
-  const status = snapshotStatus(job.status)
+  const status = snapshotStatus(run.status)
   return {
     schemaVersion: 1,
     resumeState:
       status === 'running'
         ? {
-            runId: job.jobId,
-            ...(job.threadId !== undefined ? { threadId: job.threadId } : {}),
+            runId: run.runId,
+            ...(run.threadId !== undefined ? { threadId: run.threadId } : {}),
           }
         : null,
     status,
-    ...(job.result !== undefined ? { result: job.result } : {}),
-    ...(job.error !== undefined ? { error: job.error } : {}),
-    ...(job.activity !== undefined ? { activity: job.activity } : {}),
+    ...(run.result !== undefined ? { result: run.result } : {}),
+    ...(run.error !== undefined ? { error: run.error } : {}),
+    ...(run.activity !== undefined ? { activity: run.activity } : {}),
   }
 }
 
@@ -101,19 +101,20 @@ function jsonResponse(body: ReconstructedGeneration): Response {
 
 /**
  * Build the JSON `Response` a server-authoritative client hydrates a generation
- * from on load. Reads a `?jobId=` (preferred) or `?threadId=` from the request
+ * from on load. Reads a `?runId=` (preferred) or `?threadId=` from the request
  * query and returns `{ resumeSnapshot, activeRun }`
  * ({@link ReconstructedGeneration}):
  *
- * - Resolves the job by `jobId` via `stores.jobs.get`, else the latest job
- *   linked to `threadId` via the optional `stores.jobs.findLatestForThread`.
- * - `resumeSnapshot` — the job mapped to a client snapshot (status, result,
+ * - Resolves the run by `runId` via `stores.generationRuns.get`, else the
+ *   latest run linked to `threadId` via the optional
+ *   `stores.generationRuns.findLatestForThread`.
+ * - `resumeSnapshot` — the run mapped to a client snapshot (status, result,
  *   error, activity, and a `resumeState` cursor while still running), or `null`.
- * - `activeRun` — `{ runId }` when the job is still generating, else `null`.
+ * - `activeRun` — `{ runId }` when the run is still generating, else `null`.
  *
- * Requires `stores.jobs`. Returns `{ resumeSnapshot: null, activeRun: null }`
- * when no id is supplied or no matching job exists, so the caller never has to
- * special-case a first load.
+ * Requires `stores.generationRuns`. Returns
+ * `{ resumeSnapshot: null, activeRun: null }` when no id is supplied or no
+ * matching run exists, so the caller never has to special-case a first load.
  *
  * This helper does **not** enforce tenancy by itself. Pass
  * {@link ReconstructGenerationOptions.authorize} (or wrap the call in your own
@@ -136,19 +137,19 @@ export async function reconstructGeneration(
   options?: ReconstructGenerationOptions,
 ): Promise<Response> {
   validateReconstructGenerationStores(persistence)
-  const jobStore = persistence.stores.jobs
-  if (!jobStore) {
+  const runStore = persistence.stores.generationRuns
+  if (!runStore) {
     // validateReconstructGenerationStores already throws; this narrows for TS.
-    throw new Error('reconstructGeneration requires stores.jobs.')
+    throw new Error('reconstructGeneration requires stores.generationRuns.')
   }
 
   const params = new URL(request.url).searchParams
-  const jobParam = options?.jobParam ?? 'jobId'
+  const runParam = options?.runParam ?? 'runId'
   const threadParam = options?.param ?? 'threadId'
-  const jobId = params.get(jobParam) ?? ''
+  const runId = params.get(runParam) ?? ''
   const threadId = params.get(threadParam) ?? ''
 
-  const id = jobId || threadId
+  const id = runId || threadId
   if (!id) {
     return jsonResponse({ resumeSnapshot: null, activeRun: null })
   }
@@ -169,16 +170,16 @@ export async function reconstructGeneration(
     }
   }
 
-  const job = jobId
-    ? await jobStore.get(jobId)
-    : ((await jobStore.findLatestForThread?.(threadId)) ?? null)
+  const run = runId
+    ? await runStore.get(runId)
+    : ((await runStore.findLatestForThread?.(threadId)) ?? null)
 
-  if (!job) {
+  if (!run) {
     return jsonResponse({ resumeSnapshot: null, activeRun: null })
   }
 
   return jsonResponse({
-    resumeSnapshot: jobToSnapshot(job),
-    activeRun: job.status === 'running' ? { runId: job.jobId } : null,
+    resumeSnapshot: runToSnapshot(run),
+    activeRun: run.status === 'running' ? { runId: run.runId } : null,
   })
 }

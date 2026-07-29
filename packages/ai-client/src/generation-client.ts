@@ -670,7 +670,9 @@ export class GenerationClient<
       ...(result?.id !== undefined ? { id: result.id } : {}),
       ...(result?.model !== undefined ? { model: result.model } : {}),
       ...(result?.status !== undefined ? { status: result.status } : {}),
-      ...(result?.jobId !== undefined ? { jobId: result.jobId } : {}),
+      ...(result?.providerJobId !== undefined
+        ? { providerJobId: result.providerJobId }
+        : {}),
       ...(result?.expiresAt !== undefined
         ? { expiresAt: result.expiresAt }
         : {}),

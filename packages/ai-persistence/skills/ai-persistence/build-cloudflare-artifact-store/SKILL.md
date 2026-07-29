@@ -5,7 +5,7 @@ description: Use when a Cloudflare Worker needs durable byte storage for TanStac
 
 # Cloudflare Artifact + Blob Store
 
-`withGenerationPersistence(persistence)` needs only `stores.jobs` to track a
+`withGenerationPersistence(persistence)` needs only `stores.generationRuns` to track a
 generation's lifecycle. Add `stores.artifacts` (metadata) **and** `stores.blobs`
 (the bytes) — both, or neither — and the middleware also persists the generated
 media: image/audio/TTS/video/transcription bytes land at blob key
@@ -18,7 +18,7 @@ artifact bytes with `retrieveArtifact` / `retrieveBlob`.
 
 Read the sibling **ai-persistence/build-cloudflare-adapter** skill for the
 per-request-binding rule, `wrangler` config shape, D1 migration workflow, and the
-chat (jobs/messages) side. This skill covers only the two byte-storage stores and
+chat (generation-run/message) side. This skill covers only the two byte-storage stores and
 how to compose them.
 
 ## The two contracts, verbatim
@@ -268,7 +268,7 @@ secondary index.
 ## 3. Compose and wire
 
 Bindings are per-request on Workers, so export a **factory**. Combine the byte
-stores with a jobs store (and, if this Worker also does chat, the chat stores).
+stores with a generation-run store (and, if this Worker also does chat, the chat stores).
 Either build the whole `AIPersistence` with `defineAIPersistence`, or layer the
 artifact stores onto an existing chat persistence with `composePersistence`:
 
@@ -280,20 +280,20 @@ import {
 } from '@tanstack/ai-persistence'
 import { r2BlobStore } from './r2-blob-store'
 import { d1ArtifactStore } from './d1-artifact-store'
-import { d1GenerationJobStore } from './d1-job-store' // your GenerationJobStore
+import { d1GenerationRunStore } from './d1-job-store' // your GenerationRunStore
 
 /** Call inside a request handler — bindings are not available at module scope. */
 export function generationPersistence(env: Env) {
   return defineAIPersistence({
     stores: {
-      jobs: d1GenerationJobStore(env.DB),
+      generationRuns: d1GenerationRunStore(env.DB),
       artifacts: d1ArtifactStore(env.DB),
       blobs: r2BlobStore(env.ARTIFACTS_BUCKET),
     },
   })
 }
 
-// …or add bytes to a persistence that already has chat + jobs:
+// …or add bytes to a persistence that already has chat + generation runs:
 // composePersistence(chatAndJobsPersistence(env), {
 //   overrides: {
 //     artifacts: d1ArtifactStore(env.DB),
@@ -361,7 +361,7 @@ export async function GET(request: Request, env: Env) {
 
 To hydrate a **server-driven generation client** (`persistence: true` + a stable
 `threadId`) on mount, also expose `reconstructGeneration(persistence, request)`
-on a GET that reads `?threadId=` / `?jobId=` — see `ai-core/client-persistence`.
+on a GET that reads `?threadId=` / `?runId=` — see `ai-core/client-persistence`.
 
 ## Other backends — the contract is tiny, here's how each maps
 
@@ -386,7 +386,7 @@ For each: `contentType` and `customMetadata` ride the SDK's own metadata fields;
 
 The shared `runPersistenceConformance` testkit currently covers the four **state**
 stores only (`messages`, `runs`, `interrupts`, `metadata`) — it does **not**
-exercise `blobs`, `artifacts`, or `jobs`. So the byte stores need their **own**
+exercise `blobs`, `artifacts`, or `generationRuns`. So the byte stores need their **own**
 tests. Run them against a Miniflare R2 + D1 binding with the migration applied,
 reset between runs (see **ai-persistence/build-cloudflare-adapter** for the
 `cloudflare:test` harness pattern). Assert against the reference in-memory stores

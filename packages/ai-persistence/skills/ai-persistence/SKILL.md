@@ -45,7 +45,7 @@ the result to `withPersistence`. The core never inspects your tables.
 | Ships in the package                                                        | What it is                                                  |
 | --------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | `MessageStore` / `RunStore` / `InterruptStore` / `MetadataStore`            | The four **chat** state contracts                           |
-| `GenerationJobStore` / `ArtifactStore` / `BlobStore`                        | The **generation** contracts (job lifecycle + bytes)        |
+| `GenerationRunStore` / `ArtifactStore` / `BlobStore`                        | The **generation** contracts (job lifecycle + bytes)        |
 | `withPersistence` / `withGenerationPersistence`                             | Chat + generation middleware                                |
 | `memoryPersistence()`                                                       | In-process reference backend, all seven stores (dev, tests) |
 | `reconstructChat` / `reconstructGeneration`                                 | Server hydrate route helpers (chat / generation)            |
@@ -55,7 +55,7 @@ the result to `withPersistence`. The core never inspects your tables.
 
 **Chat vs generation stores.** Chat persistence keys on `threadId` and uses
 `messages` + optional `runs` / `interrupts` / `metadata`. Generation persistence
-keys on `jobId` and uses `jobs` (required by `withGenerationPersistence`) plus an
+keys on its own `runId` and uses `generationRuns` (required by `withGenerationPersistence`) plus an
 optional `artifacts` + `blobs` **pair** — provide both or neither — to store the
 generated media bytes at blob key `artifacts/<runId>/<artifactId>`. `threadId` on
 a generation is only an optional _link_ to a chat, never the job's identity. To

@@ -51,15 +51,15 @@ stored transcript is loaded and used.
 ## Generation middleware lifecycle
 
 `withGenerationPersistence(persistence)` records the job: `onStart` creates or
-resumes the job record, `onFinish`, `onError`, and `onAbort` terminalize it,
+resumes the run record, `onFinish`, `onError`, and `onAbort` terminalize it,
 and a result transform captures the terminal result metadata (ids, urls — never
 media bytes) onto the record. When `artifacts` and `blobs` are both provided it
 also persists the generated media and merges the durable refs onto both the
-result and the job record.
+result and the run record.
 
-Generation uses its own `jobs` store (`GenerationJobStore`), never chat's
-`runs` / `messages`. A generation has no conversation, so the job is keyed on
-its own `jobId` (`ctx.runId ?? ctx.requestId`) and `threadId` is **optional** —
+Generation uses its own `generationRuns` store (`GenerationRunStore`), never chat's
+`runs` / `messages`. A generation has no conversation, so the run is keyed on
+its own `runId` (`ctx.runId ?? ctx.requestId`) and `threadId` is **optional** —
 carried through only when the caller supplies one, as a link to a chat or as
 the stable hydration key a server-driven client reloads by. It is never faked
 from the request id, and `threadId` never becomes the job's primary identity.
@@ -96,9 +96,9 @@ removed. Unknown store keys are rejected statically and by runtime validation.
 Middleware adds entrypoint validation:
 
 - chat requires `messages`; rejects `interrupts` without `runs`.
-- generation requires `jobs`.
+- generation requires `generationRuns`.
 - `reconstructChat` requires `messages`.
-- `reconstructGeneration` requires `jobs`.
+- `reconstructGeneration` requires `generationRuns`.
 
 The runtime checks are required because JavaScript, configuration loading, and
 explicitly widened types can bypass static guarantees.

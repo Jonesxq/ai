@@ -262,7 +262,7 @@ describe('generation resume state reducer', () => {
     ])
 
     expect(snapshot.status).toBe('running')
-    expect(snapshot.result?.jobId).toBe('job-42')
+    expect(snapshot.result?.providerJobId).toBe('job-42')
   })
 
   it('merges an initial seed and lets later run events update it', () => {

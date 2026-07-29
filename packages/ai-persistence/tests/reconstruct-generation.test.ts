@@ -10,15 +10,15 @@ async function body(response: Response): Promise<ReconstructedGeneration> {
 describe('reconstructGeneration', () => {
   it('maps a completed job to a resume snapshot', async () => {
     const persistence = memoryPersistence()
-    await persistence.stores.jobs.createOrResume({
-      jobId: 'job-done',
+    await persistence.stores.generationRuns.createOrResume({
+      runId: 'job-done',
       threadId: 'thread-1',
       activity: 'image',
       provider: 'test-image-provider',
       model: 'test-image-model',
       startedAt: 1000,
     })
-    await persistence.stores.jobs.update('job-done', {
+    await persistence.stores.generationRuns.update('job-done', {
       status: 'complete',
       finishedAt: 2000,
       result: { id: 'image-result' },
@@ -46,8 +46,8 @@ describe('reconstructGeneration', () => {
 
   it('reports an active run and resume state for a running job', async () => {
     const persistence = memoryPersistence()
-    await persistence.stores.jobs.createOrResume({
-      jobId: 'job-live',
+    await persistence.stores.generationRuns.createOrResume({
+      runId: 'job-live',
       threadId: 'thread-live',
       activity: 'video',
       provider: 'test-video-provider',
@@ -55,11 +55,11 @@ describe('reconstructGeneration', () => {
       startedAt: 5000,
     })
 
-    // Resolve by jobId directly.
+    // Resolve by runId directly.
     const parsed = await body(
       await reconstructGeneration(
         persistence,
-        new Request('http://example.test/api/generation?jobId=job-live'),
+        new Request('http://example.test/api/generation?runId=job-live'),
       ),
     )
     expect(parsed.activeRun).toEqual({ runId: 'job-live' })
@@ -72,15 +72,15 @@ describe('reconstructGeneration', () => {
 
   it('surfaces an interrupted job as error status', async () => {
     const persistence = memoryPersistence()
-    await persistence.stores.jobs.createOrResume({
-      jobId: 'job-int',
+    await persistence.stores.generationRuns.createOrResume({
+      runId: 'job-int',
       threadId: 'thread-int',
       activity: 'audio',
       provider: 'p',
       model: 'm',
       startedAt: 1,
     })
-    await persistence.stores.jobs.update('job-int', {
+    await persistence.stores.generationRuns.update('job-int', {
       status: 'interrupted',
       finishedAt: 2,
     })
@@ -88,7 +88,7 @@ describe('reconstructGeneration', () => {
     const parsed = await body(
       await reconstructGeneration(
         persistence,
-        new Request('http://example.test/api/generation?jobId=job-int'),
+        new Request('http://example.test/api/generation?runId=job-int'),
       ),
     )
     expect(parsed.resumeSnapshot?.status).toBe('error')
@@ -118,8 +118,8 @@ describe('reconstructGeneration', () => {
 
   it('returns 403 when authorize returns false', async () => {
     const persistence = memoryPersistence()
-    await persistence.stores.jobs.createOrResume({
-      jobId: 'job-secret',
+    await persistence.stores.generationRuns.createOrResume({
+      runId: 'job-secret',
       threadId: 'thread-secret',
       activity: 'image',
       provider: 'p',
@@ -129,7 +129,7 @@ describe('reconstructGeneration', () => {
 
     const response = await reconstructGeneration(
       persistence,
-      new Request('http://example.test/api/generation?jobId=job-secret'),
+      new Request('http://example.test/api/generation?runId=job-secret'),
       { authorize: () => false },
     )
     expect(response.status).toBe(403)

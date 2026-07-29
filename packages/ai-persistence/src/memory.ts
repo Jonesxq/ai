@@ -8,8 +8,8 @@ import type {
   BlobObject,
   BlobRecord,
   BlobStore,
-  GenerationJobRecord,
-  GenerationJobStore,
+  GenerationRunRecord,
+  GenerationRunStore,
   InterruptRecord,
   InterruptStore,
   MessageStore,
@@ -69,18 +69,18 @@ class MemoryRunStore implements RunStore {
   }
 }
 
-class MemoryGenerationJobStore implements GenerationJobStore {
-  private readonly jobs = new Map<string, GenerationJobRecord>()
+class MemoryGenerationRunStore implements GenerationRunStore {
+  private readonly generationRuns = new Map<string, GenerationRunRecord>()
   createOrResume(
     input: Pick<
-      GenerationJobRecord,
-      'jobId' | 'activity' | 'provider' | 'model' | 'startedAt'
-    > & { threadId?: string; status?: GenerationJobRecord['status'] },
-  ): Promise<GenerationJobRecord> {
-    const existing = this.jobs.get(input.jobId)
+      GenerationRunRecord,
+      'runId' | 'activity' | 'provider' | 'model' | 'startedAt'
+    > & { threadId?: string; status?: GenerationRunRecord['status'] },
+  ): Promise<GenerationRunRecord> {
+    const existing = this.generationRuns.get(input.runId)
     if (existing) return Promise.resolve(existing)
-    const record: GenerationJobRecord = {
-      jobId: input.jobId,
+    const record: GenerationRunRecord = {
+      runId: input.runId,
       activity: input.activity,
       provider: input.provider,
       model: input.model,
@@ -88,28 +88,28 @@ class MemoryGenerationJobStore implements GenerationJobStore {
       startedAt: input.startedAt,
       ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
     }
-    this.jobs.set(record.jobId, record)
+    this.generationRuns.set(record.runId, record)
     return Promise.resolve(record)
   }
   update(
-    jobId: string,
+    runId: string,
     patch: Partial<
       Pick<
-        GenerationJobRecord,
+        GenerationRunRecord,
         'status' | 'finishedAt' | 'error' | 'result' | 'artifacts' | 'usage'
       >
     >,
   ): Promise<void> {
-    const existing = this.jobs.get(jobId)
-    if (existing) this.jobs.set(jobId, { ...existing, ...patch })
+    const existing = this.generationRuns.get(runId)
+    if (existing) this.generationRuns.set(runId, { ...existing, ...patch })
     return Promise.resolve()
   }
-  get(jobId: string): Promise<GenerationJobRecord | null> {
-    return Promise.resolve(this.jobs.get(jobId) ?? null)
+  get(runId: string): Promise<GenerationRunRecord | null> {
+    return Promise.resolve(this.generationRuns.get(runId) ?? null)
   }
-  findLatestForThread(threadId: string): Promise<GenerationJobRecord | null> {
-    const linked = [...this.jobs.values()]
-      .filter((job) => job.threadId === threadId)
+  findLatestForThread(threadId: string): Promise<GenerationRunRecord | null> {
+    const linked = [...this.generationRuns.values()]
+      .filter((run) => run.threadId === threadId)
       .sort((a, b) => b.startedAt - a.startedAt)
     return Promise.resolve(linked[0] ?? null)
   }
@@ -420,7 +420,7 @@ class MemoryBlobStore implements BlobStore {
 interface MemoryPersistenceStores {
   messages: MessageStore
   runs: RunStore
-  jobs: GenerationJobStore
+  generationRuns: GenerationRunStore
   interrupts: InterruptStore
   metadata: MetadataStore
   artifacts: ArtifactStore
@@ -430,15 +430,15 @@ interface MemoryPersistenceStores {
 /**
  * In-process reference backend for the full state + generation store set.
  *
- * Returns messages + runs + jobs + interrupts + metadata + artifacts + blobs.
- * Locks are not included — use `InMemoryLockStore` + `withLocks` from
+ * Returns messages + runs + generationRuns + interrupts + metadata + artifacts
+ * + blobs. Locks are not included — use `InMemoryLockStore` + `withLocks` from
  * `@tanstack/ai` when a test or single-process app needs coordination.
  */
 export function memoryPersistence() {
   const stores: MemoryPersistenceStores = {
     messages: new MemoryMessageStore(),
     runs: new MemoryRunStore(),
-    jobs: new MemoryGenerationJobStore(),
+    generationRuns: new MemoryGenerationRunStore(),
     interrupts: new MemoryInterruptStore(),
     metadata: new MemoryMetadataStore(),
     artifacts: new MemoryArtifactStore(),

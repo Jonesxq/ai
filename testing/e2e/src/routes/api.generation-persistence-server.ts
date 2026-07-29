@@ -34,7 +34,7 @@ const TINY_PNG_B64 =
 const DURABLE_IMAGE_URL = '/durable/generation-server/image-1.png'
 
 // Server-authoritative record of the last completed generation per thread. In
-// production this is a `GenerationJobStore` row; here a process-lifetime map is
+// production this is a `GenerationRunStore` row; here a process-lifetime map is
 // enough for the reload round-trip (the e2e server stays up across reloads).
 const completedByThread = new Map<string, Record<string, unknown>>()
 

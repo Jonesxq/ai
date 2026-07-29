@@ -245,8 +245,8 @@ function imageAdapterThatThrows(thrown: unknown): ImageAdapter<string> {
   }
 }
 
-// A generation job is keyed on `jobId` (`ctx.runId ?? ctx.requestId`). With no
-// runId supplied the auto-generated `requestId` is the jobId, so the integration
+// A generation run is keyed on `runId` (`ctx.runId ?? ctx.requestId`). With no
+// runId supplied the auto-generated `requestId` is the runId, so the integration
 // tests capture it via a probe middleware, and the direct-drive tests set
 // `requestId` to the pre-created job's id.
 function generationContext(requestId: string): GenerationMiddlewareContext {
@@ -281,7 +281,7 @@ describe('generation persistence error/abort hooks', () => {
       }),
     ).rejects.toThrow('image boom')
 
-    const job = await persistence.stores.jobs.get(requestId)
+    const job = await persistence.stores.generationRuns.get(requestId)
     expect(job?.status).toBe('error')
     expect(job?.error).toEqual({ message: 'image boom' })
   })
@@ -305,7 +305,7 @@ describe('generation persistence error/abort hooks', () => {
       }),
     ).rejects.toBeDefined()
 
-    const job = await persistence.stores.jobs.get(requestId)
+    const job = await persistence.stores.generationRuns.get(requestId)
     expect(job?.status).toBe('error')
     expect(job?.error).toEqual({ message: 'image string failure' })
   })
@@ -314,8 +314,8 @@ describe('generation persistence error/abort hooks', () => {
     const persistence = memoryPersistence()
     const middleware = withGenerationPersistence(persistence)
 
-    await persistence.stores.jobs.createOrResume({
-      jobId: 'req-abort',
+    await persistence.stores.generationRuns.createOrResume({
+      runId: 'req-abort',
       activity: 'image',
       provider: 'test',
       model: 'test-model',
@@ -330,16 +330,16 @@ describe('generation persistence error/abort hooks', () => {
     }
     await middleware.onAbort?.(generationContext('req-abort'), abortInfo)
 
-    expect((await persistence.stores.jobs.get('req-abort'))?.status).toBe(
-      'interrupted',
-    )
+    expect(
+      (await persistence.stores.generationRuns.get('req-abort'))?.status,
+    ).toBe('interrupted')
   })
 
   it('coerces a non-Error into the job error message via the onError handler', async () => {
     const persistence = memoryPersistence()
     const middleware = withGenerationPersistence(persistence)
-    await persistence.stores.jobs.createOrResume({
-      jobId: 'req-err',
+    await persistence.stores.generationRuns.createOrResume({
+      runId: 'req-err',
       activity: 'image',
       provider: 'test',
       model: 'test-model',
@@ -351,7 +351,7 @@ describe('generation persistence error/abort hooks', () => {
     }
     await middleware.onError?.(generationContext('req-err'), errorInfo)
 
-    const job = await persistence.stores.jobs.get('req-err')
+    const job = await persistence.stores.generationRuns.get('req-err')
     expect(job?.status).toBe('error')
     expect(job?.error).toEqual({ message: '[object Object]' })
   })

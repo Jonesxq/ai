@@ -271,7 +271,7 @@ describe('withGenerationPersistence generation artifacts', () => {
     const full = memoryPersistence()
     const persistence = defineAIPersistence({
       stores: {
-        jobs: full.stores.jobs,
+        generationRuns: full.stores.generationRuns,
       },
     })
 
@@ -287,7 +287,7 @@ describe('withGenerationPersistence generation artifacts', () => {
     })
 
     expect(() => withGenerationPersistence(persistence)).toThrow(
-      /Generation persistence requires stores\.jobs/i,
+      /Generation persistence requires stores\.generationRuns/i,
     )
   })
 
@@ -302,9 +302,9 @@ describe('withGenerationPersistence generation artifacts', () => {
       middleware: [withGenerationPersistence(persistence)],
     })
 
-    const job = await persistence.stores.jobs.get('run-job')
+    const job = await persistence.stores.generationRuns.get('run-job')
     expect(job).toMatchObject({
-      jobId: 'run-job',
+      runId: 'run-job',
       threadId: 'thread-job',
       activity: 'image',
       provider: 'test-image-provider',
@@ -333,8 +333,10 @@ describe('withGenerationPersistence generation artifacts', () => {
     })
 
     const latest =
-      await persistence.stores.jobs.findLatestForThread!('thread-latest')
-    expect(latest?.jobId).toBe('run-latest-1')
+      await persistence.stores.generationRuns.findLatestForThread!(
+        'thread-latest',
+      )
+    expect(latest?.runId).toBe('run-latest-1')
     expect(latest?.status).toBe('complete')
   })
 
@@ -355,9 +357,9 @@ describe('withGenerationPersistence generation artifacts', () => {
       }),
     ).rejects.toThrow('boom')
 
-    const job = await persistence.stores.jobs.get('run-error')
+    const job = await persistence.stores.generationRuns.get('run-error')
     expect(job).toMatchObject({
-      jobId: 'run-error',
+      runId: 'run-error',
       status: 'error',
       error: { message: 'boom' },
     })
