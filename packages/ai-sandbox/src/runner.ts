@@ -6,7 +6,16 @@
  *
  * This is intentionally transport-minimal: a stdout NDJSON pipe. Multi-client
  * reconnect / replay belongs to the persistence/EventLog layer, not here.
+ *
+ * The `journal` option adds a second, opt-in transport: instead of holding the
+ * agent's stdout pipe directly, the host redirects it into an append-only file
+ * inside the sandbox and tails that file. See `journal.ts` for why (host death
+ * cannot SIGPIPE the agent, and a later host can resume the same file from byte
+ * 0). `spawnNdjson`'s signature and unjournaled behavior are unchanged; every
+ * existing caller keeps working exactly as before.
  */
+import { EXIT_SENTINEL_KEY, journalPaths, journaledCommand } from './journal'
+import { readJournal } from './journal-reader'
 import type { ProcessOptions, SandboxHandle } from './contracts'
 
 export interface SpawnNdjsonOptions extends ProcessOptions {
@@ -20,6 +29,51 @@ export interface SpawnNdjsonOptions extends ProcessOptions {
    * e.g. the agent prompt for `claude -p`. Avoids putting the prompt in argv.
    */
   input?: string
+  /**
+   * Route the agent's stdout through an in-sandbox journal rather than holding
+   * its pipe directly.
+   *
+   * This is what makes a run survive host death: with nothing piped, there is
+   * no reader whose disappearance can SIGPIPE the agent, and a later host reads
+   * the same file from byte 0. Opt-in so every existing caller (and every
+   * existing test) is unaffected.
+   */
+  journal?: JournalOptions
+}
+
+/** Journaling configuration for {@link spawnNdjson}. */
+export interface JournalOptions {
+  /** Run id the journal path is derived from. Must match across hosts. */
+  runId: string
+  /** Journal directory. Defaults to `/tmp/tanstack-runs`. */
+  dir?: string
+  /**
+   * Read an EXISTING journal instead of starting the agent. The read still
+   * begins at byte 0 — the alignment step, not the reader, decides what has
+   * already been delivered.
+   */
+  attach?: boolean
+  /** Poll interval for providers that cannot follow. */
+  pollIntervalMs?: number
+}
+
+type JournaledOptions = SpawnNdjsonOptions & { journal: JournalOptions }
+
+function isJournaled(options: SpawnNdjsonOptions): options is JournaledOptions {
+  return options.journal !== undefined
+}
+
+function resolvePaths(options: JournaledOptions) {
+  return journalPaths(options.journal.runId, options.journal.dir)
+}
+
+/** Strip the runner-only options, leaving what `handle.process.spawn` accepts. */
+function toProcessOptions(options: SpawnNdjsonOptions): ProcessOptions {
+  const { onNonJsonLine, input, journal, ...rest } = options
+  void onNonJsonLine
+  void input
+  void journal
+  return rest
 }
 
 /** Split a stream of arbitrary string chunks into complete lines. */
@@ -41,15 +95,118 @@ export async function* toLines(
 }
 
 /**
+ * Start the agent with its stdout (and the `{"__exit":N}` sentinel) redirected
+ * into the journal, then return.
+ *
+ * Deliberately does NOT wait for the process and does NOT read its stdout: the
+ * whole point of journaling is that the host holds no handle on the agent's
+ * output, so a host that dies mid-run cannot take the agent down with it (no
+ * pipe to SIGPIPE). The spawned process is left running in the sandbox; the
+ * sentinel line the wrapper appends on exit is how anyone — this host or a
+ * successor — learns it finished. Stdin is still written directly to the
+ * spawned process, exactly as the unjournaled path does, since that transport
+ * is unaffected by where stdout goes.
+ */
+export async function startJournaledAgent(
+  handle: SandboxHandle,
+  command: string,
+  options: JournaledOptions,
+): Promise<void> {
+  const paths = resolvePaths(options)
+  const proc = await handle.process.spawn(
+    journaledCommand(command, paths),
+    toProcessOptions(options),
+  )
+  if (options.input !== undefined) {
+    await proc.stdin.write(options.input)
+    await proc.stdin.end()
+  }
+}
+
+/**
+ * Read a run's journal and yield each line parsed as JSON.
+ *
+ * Always reads from byte 0 — the alignment step (a later phase), not this
+ * reader, decides what a client has already seen. Stops at the `{"__exit":N}`
+ * sentinel, and throws for a non-zero N so the calling adapter's existing
+ * `catch` turns it into a `RUN_ERROR`, the same observable outcome the
+ * unjournaled path produces from a non-zero `wait()`. There is nothing to
+ * `wait()` on here: the host holds a `tail`, not the agent process, so the
+ * sentinel line IS the exit code.
+ *
+ * Known regression, stated rather than silently accepted: the unjournaled path
+ * below attaches up to 1000 chars of captured stderr to the thrown error. The
+ * journaled agent's stderr goes to `paths.stderr` (a sidecar file nothing here
+ * reads), so a non-zero exit in journaled mode throws with a bare
+ * `Agent process exited with code N` and no stderr text. Reading that sidecar
+ * back requires a shell read command this task does not have — `journal.ts`
+ * (owned by a different task) only exposes read commands for the journal file,
+ * not the stderr sidecar — so surfacing it is left to a follow-up rather than
+ * invented here ad hoc.
+ */
+export async function* readJournalNdjson(
+  handle: SandboxHandle,
+  options: JournaledOptions,
+): AsyncIterable<unknown> {
+  const paths = resolvePaths(options)
+  for await (const { line } of readJournal(handle, {
+    paths,
+    fromByte: 0,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.journal.pollIntervalMs === undefined
+      ? {}
+      : { pollIntervalMs: options.journal.pollIntervalMs }),
+  })) {
+    const trimmed = line.trim()
+    if (trimmed === '') continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(trimmed)
+    } catch {
+      options.onNonJsonLine?.(trimmed)
+      continue
+    }
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      EXIT_SENTINEL_KEY in parsed
+    ) {
+      const code = (parsed as Record<string, unknown>)[EXIT_SENTINEL_KEY]
+      if (typeof code === 'number' && code !== 0) {
+        // See the "Known regression" note above: stderr is not available here.
+        throw new Error(`Agent process exited with code ${code}`)
+      }
+      return
+    }
+    yield parsed
+  }
+}
+
+/**
  * Spawn `command` in the sandbox and yield each stdout line parsed as JSON.
- * Resolves the spawn handle's exit via `wait()` after stdout closes; a non-zero
- * exit with no events surfaced is the adapter's concern to detect.
+ *
+ * Without `options.journal`, behavior is byte-identical to before: resolves
+ * the spawn handle's exit via `wait()` after stdout closes; a non-zero exit
+ * with no events surfaced is the adapter's concern to detect.
+ *
+ * With `options.journal`, the agent's stdout is redirected into an in-sandbox
+ * journal (unless `journal.attach` is set, meaning a run already in flight)
+ * and then read back from byte 0 — one code path for a fresh run and an
+ * attach, both going through {@link readJournalNdjson}.
  */
 export async function* spawnNdjson(
   handle: SandboxHandle,
   command: string,
   options: SpawnNdjsonOptions = {},
 ): AsyncIterable<unknown> {
+  if (isJournaled(options)) {
+    if (options.journal.attach !== true) {
+      await startJournaledAgent(handle, command, options)
+    }
+    yield* readJournalNdjson(handle, options)
+    return
+  }
+
   const { onNonJsonLine, input, ...processOptions } = options
   const proc = await handle.process.spawn(command, processOptions)
 

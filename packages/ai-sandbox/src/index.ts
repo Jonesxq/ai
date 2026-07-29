@@ -132,8 +132,36 @@ export {
 export { createExecBackedGit } from './git-exec'
 
 // Harness runner: spawn an agent CLI in a sandbox + stream NDJSON stdout
-export { spawnNdjson, toLines } from './runner'
-export type { SpawnNdjsonOptions } from './runner'
+export {
+  spawnNdjson,
+  toLines,
+  startJournaledAgent,
+  readJournalNdjson,
+} from './runner'
+export type { SpawnNdjsonOptions, JournalOptions } from './runner'
+
+// The agent output journal: the durability boundary for a sandboxed run.
+export {
+  DEFAULT_JOURNAL_DIR,
+  EXIT_SENTINEL_KEY,
+  journalPaths,
+  journaledCommand,
+  journalFollowCommand,
+  journalReadCommand,
+  journalExistsCommand,
+} from './journal'
+export type { JournalPaths } from './journal'
+export {
+  DEFAULT_JOURNAL_POLL_MS,
+  journalReadStrategy,
+  readJournal,
+} from './journal-reader'
+export type { ReadJournalOptions } from './journal-reader'
+export { decodeBase64Stream, toJournalLines } from './journal-bytes'
+export type { JournalLine } from './journal-bytes'
+export { createRunScopedIdGen, chunkFingerprint } from './chunk-identity'
+export { alignToStoredLog, JournalReplayDivergedError } from './align'
+export type { AlignToStoredLogOptions } from './align'
 
 // MCP tool-proxy bridge (shared by harness adapters): transport-agnostic core
 // + the node:http host transport + a fetch-friendly JSON-RPC dispatcher.
