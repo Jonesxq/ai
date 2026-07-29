@@ -6,6 +6,7 @@ import {
   approvalId,
   buildApprovalRequestedEvent,
   createBridgeEventChannel,
+  createRunScopedIdGen,
   getSandbox,
   getSandboxPolicy,
   getToolBridgeProvisioner,
@@ -301,6 +302,14 @@ export class ClaudeCodeTextAdapter<
       const sandbox = this.sandboxFrom(options)
       cleanupSandbox = sandbox
       const cwd = this.workdir(options)
+      // Durability caveat: the journaled path below derives its journal
+      // path and its message-id generator from `runId`. A resuming host
+      // must recompute the same `runId` to find the same journal file and
+      // reproduce the same translated ids — that's only possible when the
+      // caller supplies `runId` explicitly. Without one, this falls back to
+      // a fresh `this.generateId()` (clock + randomness), and no successor
+      // can recompute it. This fallback is intentionally left as-is here;
+      // durability is opt-in and requires a caller-supplied `runId`.
       const runId = options.runId ?? this.generateId()
       const threadId = options.threadId ?? this.generateId()
       // Surfaces custom events from bridged tools (e.g. code mode console logs)
@@ -423,6 +432,10 @@ export class ClaudeCodeTextAdapter<
           logger.provider(`provider=claude-code non-json line: ${line}`, {
             chunk: line,
           }),
+        // Route stdout through an in-sandbox journal keyed by `runId` so a
+        // resuming host can re-read it from byte 0 (see journal.ts). No
+        // `attach`/takeover here — that's a later phase's entry point.
+        journal: { runId },
       })
 
       async function* asMessages(): AsyncIterable<AgentSdkMessage> {
@@ -437,7 +450,12 @@ export class ClaudeCodeTextAdapter<
           ...(options.parentRunId !== undefined && {
             parentRunId: options.parentRunId,
           }),
-          genId: () => this.generateId(),
+          // Deterministic on the journaled path: two translations of the same
+          // journal prefix from a fresh generator seeded with the same
+          // `runId` mint the same message ids (unlike `this.generateId()`,
+          // which mixes in `Date.now()` / `Math.random()`). See
+          // `createRunScopedIdGen` in `@tanstack/ai-sandbox`.
+          genId: createRunScopedIdGen(runId),
           onSdkMessage: (message) =>
             logger.provider(`provider=claude-code type=${message.type}`, {
               chunk: message,
