@@ -86,12 +86,19 @@ export interface MessageStore {
 export type RunStatus = 'running' | 'completed' | 'failed' | 'interrupted'
 
 /**
- * A single **chat** run (one agent turn within a conversation).
+ * A single **chat** run: one `RUN_STARTED` → `RUN_FINISHED` cycle of the
+ * AG-UI protocol, persisted.
+ *
+ * A run is NOT a conversational turn, in either direction. It contains many
+ * agent-loop turns (each tool-call cycle is a turn whose text accumulates
+ * separately), and one user-visible turn may span several runs, because
+ * resuming after an interrupt mints a fresh `runId` — which is why
+ * {@link RunStore.findActiveRun} reconnects from the stable `threadId` rather
+ * than a run id.
  *
  * `threadId` is the conversation key ({@link Scope.threadId}) — never a
- * generation `requestId`. Generation jobs must not reuse this record by
- * faking `threadId = requestId`; they need a separate job store (see
- * `withGenerationPersistence` JSDoc).
+ * generation `requestId`. Generation jobs do not use this record; they have
+ * their own {@link GenerationJobRecord} keyed on `jobId`.
  *
  * @property startedAt - Epoch ms when the run was first created.
  * @property finishedAt - Epoch ms when the run reached a terminal status.

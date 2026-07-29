@@ -5,6 +5,15 @@ import type { UseSummarizeReturn } from '@tanstack/ai-react'
 import { fetchServerSentEvents } from '@tanstack/ai-client'
 import { summarizeFn, summarizeStreamFn } from '../lib/server-fns'
 import type { StreamChunk } from '@tanstack/ai'
+import {
+  generationRunPersistence,
+  rememberRunLabel,
+} from '../lib/generation-runs'
+import { GenerationRunHistory } from '../components/GenerationRunHistory'
+
+// Persist each variant's lightweight resume snapshot across reloads and record
+// finished runs into the shared history list rendered below the form.
+const summarizePersistence = generationRunPersistence('summarize')
 
 const SAMPLE_TEXT = `Artificial intelligence (AI) has rapidly transformed from a niche academic pursuit into one of the most influential technologies of the 21st century. The development of large language models, in particular, has demonstrated capabilities that were previously thought to be decades away. These models can generate human-like text, translate languages, write code, and even engage in complex reasoning tasks.
 
@@ -46,8 +55,10 @@ function StreamingSummarize() {
   // The connect adapter merges `body` into every request payload; the API
   // route reads `model` from `body.data` to pick the openaiSummarize variant.
   const hookReturn = useSummarize({
+    id: 'summarize:streaming',
     connection: fetchServerSentEvents('/api/summarize'),
     body: { model },
+    persistence: summarizePersistence,
     onChunk: (chunk) =>
       setStreamingText((prev) => consumeStreamingChunk(chunk, prev) ?? prev),
   })
@@ -79,7 +90,9 @@ function DirectSummarize() {
   // mode is non-streaming — the result appears all at once when the
   // server-fn resolves.
   const hookReturn = useSummarize({
+    id: 'summarize:direct',
     fetcher: (input) => summarizeFn({ data: { ...input, model } }),
+    persistence: summarizePersistence,
   })
 
   return (
@@ -106,7 +119,9 @@ function ServerFnSummarize() {
   // The server-fn returns an SSE Response; GenerationClient parses it and
   // routes chunks through `onChunk` exactly like the connect-adapter path.
   const hookReturn = useSummarize({
+    id: 'summarize:server-fn',
     fetcher: (input) => summarizeStreamFn({ data: { ...input, model } }),
+    persistence: summarizePersistence,
     onChunk: (chunk) =>
       setStreamingText((prev) => consumeStreamingChunk(chunk, prev) ?? prev),
   })
@@ -156,6 +171,7 @@ function SummarizeUI({
 }) {
   const handleSummarize = () => {
     if (!text.trim()) return
+    rememberRunLabel('summarize', text)
     onBeforeGenerate?.()
     // Intentionally no `maxLength` — for the OpenAI Responses API,
     // `maxLength` is mapped to `max_output_tokens`, which on GPT-5.x
@@ -328,6 +344,7 @@ function SummarizePage() {
           ) : (
             <ServerFnSummarize key="server-fn" />
           )}
+          <GenerationRunHistory kind="summarize" />
         </div>
       </div>
     </div>

@@ -50,18 +50,19 @@ stored transcript is loaded and used.
 
 ## Generation middleware lifecycle
 
-`withGenerationPersistence(persistence)` records the run: `onStart` creates or
-resumes the run record, and `onFinish`, `onError`, and `onAbort` terminalize
-it. Durable media storage (artifact metadata plus blob bytes) is a follow-up
-feature.
+`withGenerationPersistence(persistence)` records the job: `onStart` creates or
+resumes the job record, `onFinish`, `onError`, and `onAbort` terminalize it,
+and a result transform captures the terminal result metadata (ids, urls — never
+media bytes) onto the record. When `artifacts` and `blobs` are both provided it
+also persists the generated media and merges the durable refs onto both the
+result and the job record.
 
-**Do not treat this as the long-term generation model.** Today it reuses chat
-`RunStore` and dual-keys `(runId, threadId)` both to `requestId`. That is a
-stopgap: **generation jobs must not fake `threadId = requestId`.** `threadId`
-is the shared conversation key (`Scope.threadId`); a generation job's primary
-id is `requestId` / `jobId`. The follow-up should introduce a dedicated
-generation job store (and later artifact store), not chat `RunStore` /
-`MessageStore`.
+Generation uses its own `jobs` store (`GenerationJobStore`), never chat's
+`runs` / `messages`. A generation has no conversation, so the job is keyed on
+its own `jobId` (`ctx.runId ?? ctx.requestId`) and `threadId` is **optional** —
+carried through only when the caller supplies one, as a link to a chat or as
+the stable hydration key a server-driven client reloads by. It is never faked
+from the request id, and `threadId` never becomes the job's primary identity.
 
 ## Composition semantics
 
@@ -95,8 +96,9 @@ removed. Unknown store keys are rejected statically and by runtime validation.
 Middleware adds entrypoint validation:
 
 - chat requires `messages`; rejects `interrupts` without `runs`.
-- generation requires `runs`.
+- generation requires `jobs`.
 - `reconstructChat` requires `messages`.
+- `reconstructGeneration` requires `jobs`.
 
 The runtime checks are required because JavaScript, configuration loading, and
 explicitly widened types can bypass static guarantees.

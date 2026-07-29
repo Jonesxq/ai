@@ -9,10 +9,20 @@ import {
   type SpeechProviderConfig,
   type SpeechProviderId,
 } from '../lib/audio-providers'
+import {
+  generationRunPersistence,
+  rememberRunLabel,
+  rememberRunPreview,
+} from '../lib/generation-runs'
+import { GenerationRunHistory } from '../components/GenerationRunHistory'
 
 type SpeechOutput = { audioUrl: string; format?: string; duration?: number }
 
 type Mode = 'streaming' | 'direct' | 'server-fn'
+
+// Persist each variant's lightweight resume snapshot across reloads and record
+// finished runs into the shared history list rendered below the form.
+const speechPersistence = generationRunPersistence('speech')
 
 function toSpeechOutput(raw: {
   audio: string
@@ -35,6 +45,25 @@ function toSpeechOutput(raw: {
   }
 }
 
+// Capture what was generated as a small data: URL (never the session-only
+// blob: URL the UI plays) so clicking the history entry can replay it, then
+// hand off to the normal UI transform. Oversized clips are dropped by the
+// size guard in `rememberRunPreview`.
+function toSpeechOutputWithPreview(raw: {
+  audio: string
+  contentType?: string
+  format?: string
+  duration?: number
+}): SpeechOutput {
+  rememberRunPreview('speech', [
+    {
+      type: 'audio',
+      src: `data:${raw.contentType ?? 'audio/mpeg'};base64,${raw.audio}`,
+    },
+  ])
+  return toSpeechOutput(raw)
+}
+
 function SpeechGenerationForm({
   mode,
   config,
@@ -48,26 +77,32 @@ function SpeechGenerationForm({
   const hookOptions = useMemo(() => {
     if (mode === 'streaming') {
       return {
+        id: `speech:${mode}:${config.id}`,
         connection: fetchServerSentEvents('/api/generate/speech'),
         body: { provider: config.id },
-        onResult: toSpeechOutput,
+        persistence: speechPersistence,
+        onResult: toSpeechOutputWithPreview,
       }
     }
     if (mode === 'direct') {
       return {
+        id: `speech:${mode}:${config.id}`,
         fetcher: (input: { text: string; voice?: string }) =>
           generateSpeechFn({
             data: { ...input, provider: config.id },
           }),
-        onResult: toSpeechOutput,
+        persistence: speechPersistence,
+        onResult: toSpeechOutputWithPreview,
       }
     }
     return {
+      id: `speech:${mode}:${config.id}`,
       fetcher: (input: { text: string; voice?: string }) =>
         generateSpeechStreamFn({
           data: { ...input, provider: config.id },
         }),
-      onResult: toSpeechOutput,
+      persistence: speechPersistence,
+      onResult: toSpeechOutputWithPreview,
     }
   }, [mode, config.id])
 
@@ -105,6 +140,7 @@ function SpeechGenerationUI({
 }) {
   const handleGenerate = () => {
     if (!text.trim()) return
+    rememberRunLabel('speech', text)
     generate({ text: text.trim(), voice })
   }
 
@@ -277,6 +313,7 @@ function SpeechGenerationPage() {
             mode={mode}
             config={config}
           />
+          <GenerationRunHistory kind="speech" />
         </div>
       </div>
     </div>

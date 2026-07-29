@@ -5,12 +5,32 @@ import type { UseGenerateVideoReturn } from '@tanstack/ai-react'
 import { fetchServerSentEvents } from '@tanstack/ai-client'
 import { resolveMediaPrompt } from '@tanstack/ai'
 import { generateVideoFn, generateVideoStreamFn } from '../lib/server-fns'
+import {
+  generationRunPersistence,
+  rememberRunLabel,
+  rememberRunPreview,
+} from '../lib/generation-runs'
+import { GenerationRunHistory } from '../components/GenerationRunHistory'
+import type { VideoGenerateResult } from '@tanstack/ai-client'
+
+// Persist each variant's lightweight resume snapshot across reloads and record
+// finished runs into the shared history list rendered below the form. For a
+// long video run this keeps the job id around after a reload.
+const videoPersistence = generationRunPersistence('video')
+
+// Capture the generated video's URL so clicking the history entry can play it.
+function recordVideoPreview(result: VideoGenerateResult) {
+  rememberRunPreview('video', [{ type: 'video', src: result.url }])
+}
 
 function StreamingVideoGeneration() {
   const [prompt, setPrompt] = useState('')
 
   const hookReturn = useGenerateVideo({
+    id: 'video:streaming',
     connection: fetchServerSentEvents('/api/generate/video'),
+    persistence: videoPersistence,
+    onResult: recordVideoPreview,
   })
 
   return (
@@ -22,10 +42,13 @@ function DirectVideoGeneration() {
   const [prompt, setPrompt] = useState('')
 
   const hookReturn = useGenerateVideo({
+    id: 'video:direct',
     fetcher: (input) =>
       generateVideoFn({
         data: { ...input, prompt: resolveMediaPrompt(input.prompt).text },
       }),
+    persistence: videoPersistence,
+    onResult: recordVideoPreview,
   })
 
   return (
@@ -37,10 +60,13 @@ function ServerFnVideoGeneration() {
   const [prompt, setPrompt] = useState('')
 
   const hookReturn = useGenerateVideo({
+    id: 'video:server-fn',
     fetcher: (input) =>
       generateVideoStreamFn({
         data: { ...input, prompt: resolveMediaPrompt(input.prompt).text },
       }),
+    persistence: videoPersistence,
+    onResult: recordVideoPreview,
   })
 
   return (
@@ -65,6 +91,7 @@ function VideoGenerationUI({
 }) {
   const handleGenerate = () => {
     if (!prompt.trim()) return
+    rememberRunLabel('video', prompt)
     generate({ prompt: prompt.trim() })
   }
 
@@ -220,6 +247,7 @@ function VideoGenerationPage() {
           ) : (
             <ServerFnVideoGeneration key="server-fn" />
           )}
+          <GenerationRunHistory kind="video" />
         </div>
       </div>
     </div>

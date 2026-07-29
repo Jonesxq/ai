@@ -10,8 +10,17 @@ import type {
 } from '../lib/audio-providers'
 import type { UseTranscriptionReturn } from '@tanstack/ai-react'
 import type { TranscriptionGenerateInput } from '@tanstack/ai-client'
+import {
+  generationRunPersistence,
+  rememberRunLabel,
+} from '../lib/generation-runs'
+import { GenerationRunHistory } from '../components/GenerationRunHistory'
 
 type Mode = 'streaming' | 'direct' | 'server-fn'
+
+// Persist each variant's lightweight resume snapshot across reloads and record
+// finished runs into the shared history list rendered below the form.
+const transcriptionPersistence = generationRunPersistence('transcription')
 
 function TranscriptionForm({
   mode,
@@ -23,12 +32,15 @@ function TranscriptionForm({
   const hookOptions = useMemo(() => {
     if (mode === 'streaming') {
       return {
+        id: `transcription:${mode}:${config.id}`,
         connection: fetchServerSentEvents('/api/transcribe'),
         body: { provider: config.id },
+        persistence: transcriptionPersistence,
       }
     }
     if (mode === 'direct') {
       return {
+        id: `transcription:${mode}:${config.id}`,
         fetcher: (input: TranscriptionGenerateInput) =>
           transcribeFn({
             data: {
@@ -39,9 +51,11 @@ function TranscriptionForm({
               provider: config.id,
             },
           }),
+        persistence: transcriptionPersistence,
       }
     }
     return {
+      id: `transcription:${mode}:${config.id}`,
       fetcher: (input: TranscriptionGenerateInput) =>
         transcribeStreamFn({
           data: {
@@ -52,6 +66,7 @@ function TranscriptionForm({
             provider: config.id,
           },
         }),
+      persistence: transcriptionPersistence,
     }
   }, [mode, config.id])
 
@@ -79,6 +94,7 @@ function TranscriptionUI({
     )
     const dataUrl = `data:${file.type};base64,${base64}`
 
+    rememberRunLabel('transcription', file.name)
     await generate({
       audio: dataUrl,
       language: 'en',
@@ -246,6 +262,7 @@ function TranscriptionPage() {
             mode={mode}
             config={config}
           />
+          <GenerationRunHistory kind="transcription" />
         </div>
       </div>
     </div>

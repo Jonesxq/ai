@@ -2,28 +2,48 @@ import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useGenerateImage } from '@tanstack/ai-react'
 import type { UseGenerateImageReturn } from '@tanstack/ai-react'
-import {
-  fetchServerSentEvents,
-  localStoragePersistence,
-} from '@tanstack/ai-client'
+import { fetchServerSentEvents } from '@tanstack/ai-client'
 import { resolveMediaPrompt } from '@tanstack/ai'
 import { generateImageFn, generateImageStreamFn } from '../lib/server-fns'
+import {
+  generationRunPersistence,
+  rememberRunLabel,
+  rememberRunPreview,
+} from '../lib/generation-runs'
+import { GenerationRunHistory } from '../components/GenerationRunHistory'
+import type { ImageGenerationResult } from '@tanstack/ai'
 
-// Reuse the shared web-storage adapter for the lightweight generation resume
-// snapshot. Only run identity, status, errors, and result metadata are stored
-// — never the generated image bytes. A bare call needs no type argument: the
-// adapter defaults to the generation snapshot shape. The client namespaces its
-// record under `generation:<id>` and reads it back on mount, repainting the
-// hook's normal `status` / `result` / `error` fields so the last run's outcome
-// survives a full page reload.
-const imageSnapshots = localStoragePersistence({ keyPrefix: 'example:' })
+// Every variant persists its lightweight resume snapshot (run identity,
+// status, errors, result metadata — never image bytes) and records finished
+// runs into the shared history list. The client namespaces its record under
+// `generation:<id>` and reads it back on mount, repainting the hook's normal
+// `status` / `result` / `error` fields so the last run's outcome survives a
+// full page reload.
+const imagePersistence = generationRunPersistence('image')
+
+// Capture what was generated so clicking the history entry can show it.
+// Remote URLs store as-is; base64 payloads become data: URLs but oversized
+// ones are dropped by the size guard in `rememberRunPreview`.
+function recordImagePreview(result: ImageGenerationResult) {
+  rememberRunPreview(
+    'image',
+    result.images.map((img) => ({
+      type: 'image' as const,
+      src:
+        img.url ?? (img.b64Json ? `data:image/png;base64,${img.b64Json}` : ''),
+    })),
+  )
+}
 
 function StreamingImageGeneration() {
   const [prompt, setPrompt] = useState('')
   const [numberOfImages, setNumberOfImages] = useState(1)
 
   const hookReturn = useGenerateImage({
+    id: 'image:streaming',
     connection: fetchServerSentEvents('/api/generate/image'),
+    persistence: imagePersistence,
+    onResult: recordImagePreview,
   })
 
   return (
@@ -42,10 +62,13 @@ function DirectImageGeneration() {
   const [numberOfImages, setNumberOfImages] = useState(1)
 
   const hookReturn = useGenerateImage({
+    id: 'image:direct',
     fetcher: (input) =>
       generateImageFn({
         data: { ...input, prompt: resolveMediaPrompt(input.prompt).text },
       }),
+    persistence: imagePersistence,
+    onResult: recordImagePreview,
   })
 
   return (
@@ -64,10 +87,13 @@ function ServerFnImageGeneration() {
   const [numberOfImages, setNumberOfImages] = useState(1)
 
   const hookReturn = useGenerateImage({
+    id: 'image:server-fn',
     fetcher: (input) =>
       generateImageStreamFn({
         data: { ...input, prompt: resolveMediaPrompt(input.prompt).text },
       }),
+    persistence: imagePersistence,
+    onResult: recordImagePreview,
   })
 
   return (
@@ -78,54 +104,6 @@ function ServerFnImageGeneration() {
       numberOfImages={numberOfImages}
       setNumberOfImages={setNumberOfImages}
     />
-  )
-}
-
-function PersistedImageGeneration() {
-  const [prompt, setPrompt] = useState('')
-  const [numberOfImages, setNumberOfImages] = useState(1)
-
-  const hookReturn = useGenerateImage({
-    id: 'persisted-image',
-    connection: fetchServerSentEvents('/api/generate/image'),
-    persistence: imageSnapshots,
-  })
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-lg border border-orange-500/20 bg-gray-800/50 px-4 py-3 text-sm">
-        {hookReturn.resumeState ? (
-          <p className="text-gray-400">
-            Run in flight:{' '}
-            <span className="text-white">{hookReturn.resumeState.runId}</span>
-          </p>
-        ) : hookReturn.status === 'success' ? (
-          <p className="text-gray-400">
-            Last run:{' '}
-            <span className="text-white">
-              success
-              {hookReturn.result?.model ? ` (${hookReturn.result.model})` : ''}
-            </span>
-          </p>
-        ) : hookReturn.status === 'error' ? (
-          <p className="text-gray-400">
-            Last run:{' '}
-            <span className="text-white">
-              error{hookReturn.error ? ` — ${hookReturn.error.message}` : ''}
-            </span>
-          </p>
-        ) : (
-          <p className="text-gray-500">No persisted run yet.</p>
-        )}
-      </div>
-      <ImageGenerationUI
-        {...hookReturn}
-        prompt={prompt}
-        setPrompt={setPrompt}
-        numberOfImages={numberOfImages}
-        setNumberOfImages={setNumberOfImages}
-      />
-    </div>
   )
 }
 
@@ -147,6 +125,7 @@ function ImageGenerationUI({
 }) {
   const handleGenerate = () => {
     if (!prompt.trim()) return
+    rememberRunLabel('image', prompt)
     generate({ prompt: prompt.trim(), numberOfImages })
   }
 
@@ -230,9 +209,9 @@ function ImageGenerationUI({
 }
 
 function ImageGenerationPage() {
-  const [mode, setMode] = useState<
-    'streaming' | 'direct' | 'server-fn' | 'persisted'
-  >('streaming')
+  const [mode, setMode] = useState<'streaming' | 'direct' | 'server-fn'>(
+    'streaming',
+  )
 
   return (
     <div className="flex flex-col h-[calc(100vh-72px)] bg-gray-900 text-white">
@@ -275,16 +254,6 @@ function ImageGenerationPage() {
             >
               Server Fn
             </button>
-            <button
-              onClick={() => setMode('persisted')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                mode === 'persisted'
-                  ? 'bg-orange-600 text-white'
-                  : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              Persisted
-            </button>
           </div>
         </div>
       </div>
@@ -295,11 +264,10 @@ function ImageGenerationPage() {
             <StreamingImageGeneration key="streaming" />
           ) : mode === 'direct' ? (
             <DirectImageGeneration key="direct" />
-          ) : mode === 'server-fn' ? (
-            <ServerFnImageGeneration key="server-fn" />
           ) : (
-            <PersistedImageGeneration key="persisted" />
+            <ServerFnImageGeneration key="server-fn" />
           )}
+          <GenerationRunHistory kind="image" />
         </div>
       </div>
     </div>

@@ -34,6 +34,12 @@ import type {
   TTSResult,
 } from '@tanstack/ai'
 import type { LucideIcon } from 'lucide-react'
+import {
+  generationRunPersistence,
+  rememberRunLabel,
+  rememberRunPreview,
+} from '../lib/generation-runs'
+import { GenerationRunHistory } from '../components/GenerationRunHistory'
 
 const SAMPLE_WAV_BASE64 = createToneWavBase64()
 const SAMPLE_AUDIO_DATA_URL = `data:audio/wav;base64,${SAMPLE_WAV_BASE64}`
@@ -134,6 +140,17 @@ const summarizeConnection = createGenerationConnection<SummarizationResult>(
 
 const videoConnection = createVideoConnection()
 
+// Every hook persists its lightweight resume snapshot and records finished
+// runs into the shared history list rendered at the bottom of the page.
+const fixturePersistence = {
+  image: generationRunPersistence('image'),
+  audio: generationRunPersistence('audio'),
+  speech: generationRunPersistence('speech'),
+  transcription: generationRunPersistence('transcription'),
+  summarize: generationRunPersistence('summarize'),
+  video: generationRunPersistence('video'),
+}
+
 const SAMPLE_SUMMARY_TEXT =
   'Generation hooks emit core devtools snapshots with input, progress, result, and renderable previews for media and text outputs.'
 
@@ -155,31 +172,62 @@ function GenerationHooksPage() {
   const image = useGenerateImage({
     id: 'generation-hooks:useGenerateImage',
     connection: imageConnection,
+    persistence: fixturePersistence.image,
+    onResult: (result) => {
+      rememberRunPreview(
+        'image',
+        result.images.map((img) => ({
+          type: 'image' as const,
+          src: img.url ?? '',
+        })),
+      )
+    },
   })
 
   const audio = useGenerateAudio({
     id: 'generation-hooks:useGenerateAudio',
     connection: audioConnection,
+    persistence: fixturePersistence.audio,
+    onResult: (result) => {
+      rememberRunPreview('audio', [
+        { type: 'audio', src: result.audio.url ?? '' },
+      ])
+    },
   })
 
   const speech = useGenerateSpeech({
     id: 'generation-hooks:useGenerateSpeech',
     connection: speechConnection,
+    persistence: fixturePersistence.speech,
+    onResult: (result) => {
+      rememberRunPreview('speech', [
+        {
+          type: 'audio',
+          src: `data:${result.contentType ?? 'audio/wav'};base64,${result.audio}`,
+        },
+      ])
+    },
   })
 
   const transcription = useTranscription({
     id: 'generation-hooks:useTranscription',
     connection: transcriptionConnection,
+    persistence: fixturePersistence.transcription,
   })
 
   const summarize = useSummarize({
     id: 'generation-hooks:useSummarize',
     connection: summarizeConnection,
+    persistence: fixturePersistence.summarize,
   })
 
   const video = useGenerateVideo({
     id: 'generation-hooks:useGenerateVideo',
     connection: videoConnection,
+    persistence: fixturePersistence.video,
+    onResult: (result) => {
+      rememberRunPreview('video', [{ type: 'video', src: result.url }])
+    },
   })
 
   const loadingCount = [
@@ -191,20 +239,36 @@ function GenerationHooksPage() {
     video.isLoading,
   ].filter(Boolean).length
 
-  const runImage = () => image.generate({ prompt, numberOfImages: imageCount })
-  const runAudio = () => audio.generate({ prompt, duration: audioDuration })
-  const runSpeech = () => speech.generate({ text: speechText, voice: 'local' })
-  const runTranscription = () =>
-    transcription.generate({
+  const runImage = () => {
+    rememberRunLabel('image', prompt)
+    return image.generate({ prompt, numberOfImages: imageCount })
+  }
+  const runAudio = () => {
+    rememberRunLabel('audio', prompt)
+    return audio.generate({ prompt, duration: audioDuration })
+  }
+  const runSpeech = () => {
+    rememberRunLabel('speech', speechText)
+    return speech.generate({ text: speechText, voice: 'local' })
+  }
+  const runTranscription = () => {
+    rememberRunLabel('transcription', 'Local fixture audio')
+    return transcription.generate({
       audio: SAMPLE_TRANSCRIPTION_AUDIO,
       language: 'en',
     })
-  const runSummarize = () =>
-    summarize.generate({
+  }
+  const runSummarize = () => {
+    rememberRunLabel('summarize', summaryText)
+    return summarize.generate({
       text: summaryText,
       style: 'bullet-points',
     })
-  const runVideo = () => video.generate({ prompt })
+  }
+  const runVideo = () => {
+    rememberRunLabel('video', prompt)
+    return video.generate({ prompt })
+  }
 
   const runAll = async () => {
     await Promise.all([
@@ -473,6 +537,8 @@ function GenerationHooksPage() {
             )}
           </HookCard>
         </section>
+
+        <GenerationRunHistory />
       </div>
     </main>
   )
