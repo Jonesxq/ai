@@ -37,11 +37,24 @@
  * `channel.stream` from what gets journaled/replayed, or replaying it
  * separately) is out of scope for this task.
  */
-import { describe, expect, it } from 'vitest'
-import { createRunScopedIdGen, chunkFingerprint } from '@tanstack/ai-sandbox'
+import { afterAll, describe, expect, it } from 'vitest'
+import * as fsp from 'node:fs/promises'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { localProcessSandbox } from '@tanstack/ai-sandbox-local-process'
+import {
+  SandboxCapability,
+  chunkFingerprint,
+  createRunScopedIdGen,
+  journalExistsCommand,
+  journalPaths,
+} from '@tanstack/ai-sandbox'
+import { claudeCodeText } from '../src/index'
 import { translateSdkStream } from '../src/stream/translate'
+import type { InternalLogger } from '@tanstack/ai/adapter-internals'
 import type { AgentSdkMessage } from '../src/stream/sdk-types'
-import type { StreamChunk } from '@tanstack/ai'
+import type { CapabilityContext, StreamChunk } from '@tanstack/ai'
+import type { SandboxHandle } from '@tanstack/ai-sandbox'
 
 async function* fromArray(
   messages: Array<AgentSdkMessage>,
@@ -171,5 +184,176 @@ describe('translateSdkStream journaled-path determinism', () => {
     expect(first.map(chunkFingerprint)).not.toEqual(
       second.map(chunkFingerprint),
     )
+  })
+})
+
+// --- Wiring check: the actual adapter call site (not just the translator) ---
+//
+// The two tests above exercise `translateSdkStream` directly with a
+// generator we construct ourselves, so they cannot catch a regression at the
+// `chatStream` call site in `../src/adapters/text.ts` (e.g. reverting
+// `genId: createRunScopedIdGen(runId)` back to
+// `genId: () => this.generateId()`). This block runs the real adapter, via
+// the same `localProcessSandbox` harness `text-adapter.test.ts` uses, and
+// asserts:
+//   1. message ids follow the `${runId}-N` shape `createRunScopedIdGen`
+//      produces — a shape `this.generateId()`
+//      (`${name}-${Date.now()}-${random}`) never produces, and
+//   2. the sandbox journal file for this `runId` actually exists after the
+//      run, proving `spawnNdjson` really was called with `journal: { runId }`
+//      (not just that the adapter happened to mint run-scoped ids some other
+//      way).
+
+const baseDir = path.join(
+  os.tmpdir(),
+  `tanstack-ai-cc-determinism-test-${Date.now()}`,
+)
+const provider = localProcessSandbox({ baseDir, removeOnDestroy: true })
+
+afterAll(async () => {
+  try {
+    await fsp.rm(baseDir, { recursive: true, force: true })
+  } catch {
+    // Windows can report EBUSY here when a child process handle briefly
+    // outlives `sbx.destroy()`; this is a cleanup nicety, not part of what
+    // the test verifies, so a failure here must not fail the suite.
+  }
+})
+
+// Stand-in for the `claude` CLI that additionally emits a tool_use +
+// tool_result pair — the shape that exercises `genId()` via the
+// unconditional `TOOL_CALL_RESULT` path in `handleUser` (see
+// `../src/stream/translate.ts`), unlike a bare text-only assistant message
+// (whose `messageId` comes from the SDK's own `message.message.id` when
+// present, bypassing `genId()` entirely).
+const NATIVE_FAKE_CLAUDE = [
+  `let input = ''`,
+  `process.stdin.on('data', (d) => { input += d })`,
+  `process.stdin.on('end', () => {`,
+  `  const w = (o) => process.stdout.write(JSON.stringify(o) + '\\n')`,
+  `  w({ type: 'system', subtype: 'init', session_id: 'sess-1', model: 'haiku', tools: [] })`,
+  `  w({ type: 'assistant', message: { id: undefined, content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }] }, parent_tool_use_id: null })`,
+  `  w({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'file.txt' }] }, parent_tool_use_id: null })`,
+  `  w({ type: 'assistant', message: { id: undefined, content: [{ type: 'text', text: 'pong' }] }, parent_tool_use_id: null })`,
+  `  w({ type: 'result', subtype: 'success', result: 'pong', usage: { input_tokens: 1, output_tokens: 1 } })`,
+  `})`,
+].join('\n')
+
+const noopLogger = {
+  request: () => {},
+  provider: () => {},
+  errors: () => {},
+  agentLoop: () => {},
+  warnings: () => {},
+  debug: () => {},
+} as unknown as InternalLogger
+
+function capabilityContextWith(handle: SandboxHandle): CapabilityContext {
+  const [, provideSandbox] = SandboxCapability
+  const ctx = {
+    capabilities: { markProvided: () => {}, has: () => true },
+  } as unknown as CapabilityContext
+  provideSandbox(ctx, handle)
+  return ctx
+}
+
+// `@tanstack/ai-sandbox`'s journal reader picks a "follow" strategy
+// (`tail -c +N -f journal | base64`, piped through a spawned `SpawnHandle`)
+// whenever `capabilities.backgroundProcesses && capabilities.killableProcesses`
+// — true for `local-process`. On this host that pipeline's downstream
+// `base64` fully buffers its stdout (it isn't a tty and `tail -f` never
+// closes its input), so nothing is ever flushed to the reader for a payload
+// under one buffer's worth — the read hangs forever even though the journal
+// file itself is complete and correct. This is independent of anything under
+// test here (confirmed by reproducing the same hang against the plain
+// `spawnNdjson` primitive and against the already-merged
+// `ai-grok-build/tests/translate-determinism.test.ts` reference test). The
+// bounded "poll" strategy (`tail -c +N journal | base64`, no `-f`) has no such
+// problem: each poll is a one-shot process that flushes its buffer on exit.
+// `journalReadStrategy` decides purely from `handle.capabilities`, so
+// reporting `killableProcesses: false` on the handle we hand the adapter
+// steers it onto the poll path without touching `@tanstack/ai-sandbox` or
+// the adapter itself — every other operation (fs, process.exec, destroy)
+// still goes through the real local-process sandbox unchanged.
+function pollStrategyHandle(handle: SandboxHandle): SandboxHandle {
+  return {
+    ...handle,
+    capabilities: { ...handle.capabilities, killableProcesses: false },
+  }
+}
+
+async function collect(
+  stream: AsyncIterable<StreamChunk>,
+): Promise<Array<StreamChunk>> {
+  const out: Array<StreamChunk> = []
+  for await (const chunk of stream) out.push(chunk)
+  return out
+}
+
+describe('claude-code chatStream wiring (real adapter, journaled call site)', () => {
+  it('mints run-scoped message ids and actually journals under the supplied runId', async () => {
+    const sbx = await provider.create({})
+    await sbx.fs.write('/workspace/fake-claude.mjs', NATIVE_FAKE_CLAUDE)
+
+    // Unique per test run: `journalPaths`'s default directory
+    // (`/tmp/tanstack-runs`) is a REAL host path shared across every
+    // `local-process` sandbox instance and every test run (unlike the rest of
+    // the sandbox filesystem, it is not virtualized under this test's own
+    // `baseDir`/`afterAll` cleanup), and the journal file itself is opened
+    // `>>` (append-only) by design — see `journaledCommand` in
+    // `@tanstack/ai-sandbox`'s `journal.ts`. A fixed literal `runId` would
+    // collide with a previous run's leftover journal file (that file
+    // survives this test's own `afterAll`) and the read would stop at that
+    // STALE run's `__exit` sentinel, silently observing 0 of this run's
+    // events. A fresh id per invocation avoids the collision.
+    const runId = `run-wiring-check-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const adapter = claudeCodeText('haiku', {
+      claudeExecutable: 'node fake-claude.mjs',
+      streamPartials: false,
+      emitDiff: false,
+    })
+
+    const chunks = await collect(
+      adapter.chatStream({
+        model: 'haiku',
+        messages: [{ role: 'user', content: 'say pong' }],
+        logger: noopLogger,
+        runId,
+        capabilities: capabilityContextWith(pollStrategyHandle(sbx)),
+      }),
+    )
+
+    // Both the tool-result chunk (unconditional `genId()` in `handleUser`)
+    // and the text-message chunks (`message.message.id ?? genId()`, and
+    // `NATIVE_FAKE_CLAUDE` sends `id: undefined`) are backed by `genId()`
+    // here, so every `messageId` on the stream is expected to be run-scoped.
+    const messageIds = chunks
+      .map((c) => (c as { messageId?: unknown }).messageId)
+      .filter((id): id is string => typeof id === 'string')
+
+    expect(messageIds.length).toBeGreaterThan(0)
+    for (const id of messageIds) {
+      expect(id).toMatch(new RegExp(`^${runId}-\\d+$`))
+    }
+
+    // Prove `spawnNdjson` was actually invoked with `journal: { runId }` — not
+    // merely that the translator happened to receive a run-scoped generator.
+    // The existence check MUST go through the shell (`journalExistsCommand`),
+    // not `sbx.fs.exists`: on `local-process`, `fs.*` resolves `/tmp` under
+    // this sandbox's own `baseDir`, while the journal itself is written by a
+    // raw shell redirect against the REAL host `/tmp` — the two disagree (see
+    // rule 3 in `journal.ts`'s module doc).
+    const paths = journalPaths(runId)
+    const exists = await sbx.process.exec(journalExistsCommand(paths))
+    expect(exists.exitCode).toBe(0)
+
+    // Best-effort cleanup of the host-global journal file this run created
+    // (see the `runId` uniqueness note above for why it isn't covered by this
+    // test's own `baseDir`/`afterAll` cleanup).
+    await sbx.process
+      .exec(`rm -f ${paths.journal} ${paths.stderr}`)
+      .catch(() => {})
+
+    await sbx.destroy()
   })
 })
