@@ -1,0 +1,704 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createFileRoute } from '@tanstack/react-router'
+import { ImagePlus, Mic, Send, Square, X } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import rehypeRaw from 'rehype-raw'
+import rehypeSanitize from 'rehype-sanitize'
+import rehypeHighlight from 'rehype-highlight'
+import remarkGfm from 'remark-gfm'
+import {
+  fetchServerSentEvents,
+  useAudioRecorder,
+  useChat,
+  useTranscription,
+} from '@tanstack/ai-react'
+import { clientTools } from '@tanstack/ai-client'
+import { ThinkingPart } from '@tanstack/ai-react-ui'
+import type { BoundInterrupts } from '@tanstack/ai-client'
+import type { UIMessage } from '@tanstack/ai-react'
+import type { ContentPart } from '@tanstack/ai'
+import type { GeminiInteractionsCustomEventValue } from '@tanstack/ai-gemini/experimental'
+import type { ChatModelOption } from '@/lib/models'
+import GuitarRecommendation from '@/components/example-GuitarRecommendation'
+import { ChatModelSelect } from '@/components/ModelSelect'
+import {
+  addToCartToolDef,
+  addToWishListToolDef,
+  getPersonalGuitarPreferenceToolDef,
+  recommendGuitarToolDef,
+} from '@/lib/guitar-tools'
+import { chatModelApi, DEFAULT_CHAT_MODEL } from '@/lib/models'
+
+/**
+ * Generate a random message ID
+ */
+function generateMessageId(): string {
+  return `msg-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+}
+
+const getPersonalGuitarPreferenceToolClient =
+  getPersonalGuitarPreferenceToolDef.client(() => ({ preference: 'acoustic' }))
+
+const addToWishListToolClient = addToWishListToolDef.client((args) => {
+  const wishList = JSON.parse(localStorage.getItem('wishList') || '[]')
+  wishList.push(args.guitarId)
+  localStorage.setItem('wishList', JSON.stringify(wishList))
+  return {
+    success: true,
+    guitarId: args.guitarId,
+    totalItems: wishList.length,
+  }
+})
+
+const addToCartToolClient = addToCartToolDef.client((args) => ({
+  success: true,
+  cartId: 'CART_CLIENT_' + Date.now(),
+  guitarId: args.guitarId,
+  quantity: args.quantity,
+  totalItems: args.quantity,
+}))
+
+const recommendGuitarToolClient = recommendGuitarToolDef.client(({ id }) => ({
+  id: +id,
+}))
+
+const tools = clientTools(
+  getPersonalGuitarPreferenceToolClient,
+  addToWishListToolClient,
+  addToCartToolClient,
+  recommendGuitarToolClient,
+)
+
+type ChatTools = typeof tools
+
+/** Clickable starter prompts for the empty state — showcases what the demo's tools can do. */
+const STARTER_PROMPTS = [
+  'Recommend an acoustic guitar for me',
+  'What guitars do you have in stock?',
+  'Add a guitar to my wishlist',
+]
+
+function ChatInputArea({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="border-t border-orange-500/10 bg-gray-900/80 backdrop-blur-sm">
+      <div className="w-full px-4 py-3">{children}</div>
+    </div>
+  )
+}
+
+function Messages({
+  messages,
+  interrupts,
+  onStarterPrompt,
+}: {
+  messages: Array<UIMessage>
+  interrupts: BoundInterrupts<ChatTools>
+  onStarterPrompt: (prompt: string) => void
+}) {
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const hasRenderablePart = (message: UIMessage): boolean => {
+    return message.parts.some((part) => {
+      if (part.type === 'thinking') return true
+      if (part.type === 'image') return true
+      if (part.type === 'text' && part.content.trim()) return true
+      if (
+        part.type === 'tool-call' &&
+        part.name === 'recommendGuitar' &&
+        part.output
+      ) {
+        return true
+      }
+      return false
+    })
+  }
+  const visibleMessages = messages.filter(hasRenderablePart)
+
+  useEffect(() => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop =
+        messagesContainerRef.current.scrollHeight
+    }
+  }, [visibleMessages, interrupts.length])
+
+  if (!visibleMessages.length && interrupts.length === 0) {
+    return (
+      <div className="flex-1 overflow-y-auto px-4 py-8">
+        <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center gap-6 text-center">
+          <div>
+            <h2 className="text-2xl font-semibold text-white mb-2">
+              Welcome to TanStack AI
+            </h2>
+            <p className="text-gray-400 text-sm">
+              Start a conversation below, or try one of these:
+            </p>
+          </div>
+          <div className="flex flex-wrap justify-center gap-2">
+            {STARTER_PROMPTS.map((prompt) => (
+              <button
+                key={prompt}
+                onClick={() => onStarterPrompt(prompt)}
+                className="px-4 py-2 rounded-full border border-orange-500/20 bg-gray-800/50 text-sm text-gray-300 hover:border-orange-500/40 hover:text-white transition-colors"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      ref={messagesContainerRef}
+      className="flex-1 overflow-y-auto px-4 py-4"
+    >
+      <div className="mx-auto max-w-3xl">
+      {interrupts.map((interrupt) => {
+        if (interrupt.kind !== 'tool-approval') return null
+        return (
+          <div
+            key={interrupt.id}
+            className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg mb-3"
+          >
+            <p className="text-white font-medium mb-2">
+              Approval required: {interrupt.toolName}
+            </p>
+            <div className="text-gray-300 text-sm mb-3">
+              <pre className="bg-gray-800 p-2 rounded text-xs overflow-x-auto">
+                {JSON.stringify(interrupt.originalArgs, null, 2)}
+              </pre>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => interrupt.resolveInterrupt(true)}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors"
+              >
+                Approve
+              </button>
+              <button
+                type="button"
+                onClick={() => interrupt.resolveInterrupt(false)}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors"
+              >
+                Deny
+              </button>
+              <button
+                type="button"
+                onClick={() => interrupt.cancel()}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )
+      })}
+      {visibleMessages.map((message) => {
+        return (
+          <div
+            key={message.id}
+            className={`p-4 rounded-lg mb-2 ${
+              message.role === 'assistant'
+                ? 'bg-linear-to-r from-orange-500/5 to-red-600/5'
+                : 'bg-transparent'
+            }`}
+          >
+            <div className="flex items-start gap-4">
+              {message.role === 'assistant' ? (
+                <div className="w-8 h-8 rounded-lg bg-linear-to-r from-orange-500 to-red-600 flex items-center justify-center text-sm font-medium text-white shrink-0">
+                  AI
+                </div>
+              ) : (
+                <div className="w-8 h-8 rounded-lg bg-gray-700 flex items-center justify-center text-sm font-medium text-white shrink-0">
+                  U
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                {/* Render parts in order */}
+                {message.parts.map((part, index) => {
+                  if (part.type === 'thinking') {
+                    // Check if thinking is complete (if there's a text part after)
+                    const isComplete = message.parts
+                      .slice(index + 1)
+                      .some((p) => p.type === 'text')
+                    return (
+                      <div key={`thinking-${index}`} className="mt-2 mb-2">
+                        <ThinkingPart
+                          content={part.content}
+                          isComplete={isComplete}
+                          className="p-4 bg-gray-800/50 border border-gray-700/50 rounded-lg"
+                        />
+                      </div>
+                    )
+                  }
+
+                  if (part.type === 'text' && part.content) {
+                    return (
+                      <div
+                        key={`text-${index}`}
+                        className="text-white prose dark:prose-invert max-w-none"
+                      >
+                        <ReactMarkdown
+                          rehypePlugins={[
+                            rehypeRaw,
+                            rehypeSanitize,
+                            rehypeHighlight,
+                            remarkGfm,
+                          ]}
+                        >
+                          {part.content}
+                        </ReactMarkdown>
+                      </div>
+                    )
+                  }
+
+                  // Render image parts
+                  if (part.type === 'image') {
+                    const imageUrl =
+                      part.source.type === 'url'
+                        ? part.source.value
+                        : `data:image/png;base64,${part.source.value}`
+                    return (
+                      <div key={`image-${index}`} className="mt-2 mb-2">
+                        <img
+                          src={imageUrl}
+                          alt="Attached image"
+                          className="max-w-md rounded-lg border border-gray-700"
+                        />
+                      </div>
+                    )
+                  }
+
+                  // Tool approvals render from bound `interrupts` above
+                  // (resolveInterrupt). Skip legacy part.approval UI.
+                  if (
+                    part.type === 'tool-call' &&
+                    part.state === 'approval-requested'
+                  ) {
+                    return null
+                  }
+
+                  // Guitar recommendation card
+                  if (
+                    part.type === 'tool-call' &&
+                    part.name === 'recommendGuitar' &&
+                    part.output
+                  ) {
+                    return (
+                      <div key={part.id} className="mt-2">
+                        <GuitarRecommendation id={part.output?.id} />
+                      </div>
+                    )
+                  }
+
+                  return null
+                })}
+              </div>
+            </div>
+          </div>
+        )
+      })}
+      </div>
+    </div>
+  )
+}
+
+function ChatPage() {
+  const [selectedModel, setSelectedModel] =
+    useState<ChatModelOption>(DEFAULT_CHAT_MODEL)
+  const [attachedImages, setAttachedImages] = useState<
+    Array<{ id: string; base64: string; mimeType: string; preview: string }>
+  >([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  // Session-scoped Gemini Interactions id — the server surfaces it via a
+  // `gemini.interactionId` CUSTOM event, and we send it back as
+  // `previous_interaction_id` on the next turn. State (not ref) so a body
+  // change triggers `useChat` to re-sync the updated body to the client.
+  const [interactionId, setInteractionId] = useState<string | undefined>(
+    undefined,
+  )
+
+  // Reset the interaction id whenever the user switches model/provider so
+  // we don't chain against a stale or wrong-model interaction. Messages
+  // are cleared too: the Gemini Interactions API can't replay history
+  // statelessly, so carrying messages from a different provider/model
+  // into a fresh interaction would surface as
+  // "cannot send prior conversation history on a fresh interaction".
+  const modelApi = chatModelApi(selectedModel)
+  useEffect(() => {
+    setInteractionId(undefined)
+    setMessages([])
+  }, [selectedModel.provider, selectedModel.model, modelApi])
+
+  const body = useMemo(
+    () => ({
+      provider: selectedModel.provider,
+      model: selectedModel.model,
+      api: modelApi,
+      ...(modelApi === 'interactions' && interactionId
+        ? { previousInteractionId: interactionId }
+        : {}),
+    }),
+    [selectedModel.provider, selectedModel.model, modelApi, interactionId],
+  )
+
+  const {
+    messages,
+    setMessages,
+    sendMessage,
+    isLoading,
+    error,
+    interrupts,
+    stop,
+  } = useChat({
+    connection: fetchServerSentEvents('/api/tanchat'),
+    tools,
+    body,
+    onCustomEvent: (eventType, data, context) => {
+      console.log(
+        `[CustomEvent] ${eventType}`,
+        data,
+        context.toolCallId ? `(tool call: ${context.toolCallId})` : '',
+      )
+      if (eventType === 'gemini.interactionId') {
+        const value = data as
+          | GeminiInteractionsCustomEventValue<'gemini.interactionId'>
+          | undefined
+        if (value?.interactionId) setInteractionId(value.interactionId)
+      }
+    },
+  })
+  const [input, setInput] = useState('')
+
+  // Voice input: record from the mic, transcribe via /api/transcribe, then drop
+  // the text into the composer for the user to review/edit/send. (Text chat
+  // models don't accept raw audio; transcription is the path that works.)
+  // `onResult`'s `r` infers as `TranscriptionResult` from the hook (no explicit
+  // type arg needed — the generation hooks' result-type inference handles it).
+  // Surface voice-input failures (permission denied, recorder error,
+  // transcription error) to the user rather than only logging them — a silent
+  // mic button is the worst outcome.
+  const [recordError, setRecordError] = useState<string | null>(null)
+
+  const { generate: transcribe, isLoading: isTranscribing } = useTranscription({
+    connection: fetchServerSentEvents('/api/transcribe'),
+    onResult: (r) => setInput((prev) => (prev ? `${prev} ${r.text}` : r.text)),
+    // A failed transcription (network/provider) is just as silent as a mic
+    // failure if only logged — surface it in the same banner below.
+    onError: (err) => {
+      console.error('[transcribe]', err)
+      setRecordError(
+        err instanceof Error ? err.message : 'Could not transcribe audio',
+      )
+    },
+  })
+  // Errors reach us by rejecting start()/stop(), so we handle them in the
+  // try/catch below — a single channel, not an additional `onError` callback.
+  const {
+    isRecording,
+    isSupported: micSupported,
+    start: startRecording,
+    stop: stopRecording,
+  } = useAudioRecorder()
+
+  const handleMicToggle = async () => {
+    try {
+      if (isRecording) {
+        const rec = await stopRecording()
+        // Strip the `;codecs=...` parameter so the provider gets a clean type.
+        const mimeType = rec.mimeType.split(';')[0]
+        await transcribe({ audio: `data:${mimeType};base64,${rec.base64}` })
+      } else {
+        setRecordError(null)
+        await startRecording()
+      }
+    } catch (err) {
+      console.error('[audio-recorder]', err)
+      setRecordError(
+        err instanceof Error ? err.message : 'Could not record audio',
+      )
+    }
+  }
+
+  /**
+   * Handle file selection for image attachment
+   */
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+
+    const newImages: Array<{
+      id: string
+      base64: string
+      mimeType: string
+      preview: string
+    }> = []
+
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith('image/')) continue
+
+      const base64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const result = reader.result as string
+          // Remove data URL prefix (e.g., "data:image/png;base64,")
+          resolve(result.split(',')[1])
+        }
+        reader.readAsDataURL(file)
+      })
+
+      const preview = URL.createObjectURL(file)
+      newImages.push({
+        id: generateMessageId(),
+        base64,
+        mimeType: file.type, // Capture the actual mime type
+        preview,
+      })
+    }
+
+    setAttachedImages((prev) => [...prev, ...newImages])
+
+    // Reset the file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  /**
+   * Remove an attached image
+   */
+  const removeImage = (id: string) => {
+    setAttachedImages((prev) => {
+      const image = prev.find((img) => img.id === id)
+      if (image) {
+        URL.revokeObjectURL(image.preview)
+      }
+      return prev.filter((img) => img.id !== id)
+    })
+  }
+
+  /**
+   * Send message with optional image attachments
+   */
+  const handleSendMessage = () => {
+    if (!input.trim() && attachedImages.length === 0) return
+
+    if (attachedImages.length > 0) {
+      // Build multimodal content array
+      const contentParts: Array<ContentPart> = []
+
+      // Add text if present
+      if (input.trim()) {
+        contentParts.push({ type: 'text', content: input.trim() })
+      }
+
+      // Add images with mime type metadata
+      for (const img of attachedImages) {
+        contentParts.push({
+          type: 'image',
+          source: { type: 'data', value: img.base64, mimeType: img.mimeType },
+        })
+      }
+
+      // Send with custom message ID
+      sendMessage({
+        content: contentParts,
+        id: generateMessageId(),
+      })
+
+      // Clean up image previews
+      attachedImages.forEach((img) => URL.revokeObjectURL(img.preview))
+      setAttachedImages([])
+    } else {
+      // Simple text message
+      sendMessage(input.trim())
+    }
+
+    setInput('')
+  }
+
+  return (
+    <div className="flex h-[calc(100vh-72px)] bg-gray-900">
+      {/* Chat */}
+      <div className="w-full flex flex-col">
+        {/* Slim toolbar: page context left, compact model picker right */}
+        <div className="border-b border-orange-500/20 bg-gray-800 px-4 py-2">
+          <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
+            <h2 className="text-sm font-medium text-gray-300">Basic Chat</h2>
+            <div className="w-64">
+              <ChatModelSelect
+                value={selectedModel}
+                onChange={setSelectedModel}
+                disabled={isLoading}
+              />
+            </div>
+          </div>
+        </div>
+
+        <Messages
+          messages={messages}
+          interrupts={interrupts}
+          onStarterPrompt={(prompt) => {
+            if (!isLoading) sendMessage(prompt)
+          }}
+        />
+
+        {error && (
+          <div className="mx-4 md:mx-auto md:max-w-3xl mt-2 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+            {error.message}
+          </div>
+        )}
+
+        {recordError && (
+          <div className="mx-4 md:mx-auto md:max-w-3xl mt-2 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm flex items-center justify-between gap-2">
+            <span>Voice input error: {recordError}</span>
+            <button
+              onClick={() => setRecordError(null)}
+              className="text-red-300 hover:text-red-200"
+              aria-label="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        <ChatInputArea>
+          <div className="mx-auto w-full max-w-3xl space-y-3">
+            {isLoading && (
+              <div className="flex items-center justify-center">
+                <button
+                  onClick={stop}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+                >
+                  <Square className="w-4 h-4 fill-current" />
+                  Stop
+                </button>
+              </div>
+            )}
+
+            {/* Image attachment preview */}
+            {attachedImages.length > 0 && (
+              <div className="flex flex-wrap gap-2 p-2 bg-gray-800/50 rounded-lg border border-orange-500/20">
+                {attachedImages.map((img) => (
+                  <div key={img.id} className="relative group">
+                    <img
+                      src={img.preview}
+                      alt="Attached"
+                      className="w-16 h-16 object-cover rounded-lg border border-gray-700"
+                    />
+                    <button
+                      onClick={() => removeImage(img.id)}
+                      className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X className="w-3 h-3 text-white" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Composer: textarea + actions as one card */}
+            <div className="rounded-2xl border border-orange-500/20 bg-gray-800/50 shadow-lg focus-within:ring-2 focus-within:ring-orange-500/50">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={
+                  attachedImages.length > 0
+                    ? 'Add a message about your image(s)...'
+                    : "Type something clever (or don't, we won't judge)..."
+                }
+                className="w-full resize-none overflow-hidden bg-transparent px-4 pt-3 pb-1 text-sm text-white placeholder-gray-400 focus:outline-none"
+                rows={1}
+                style={{ minHeight: '44px', maxHeight: '200px' }}
+                disabled={isLoading}
+                onInput={(e) => {
+                  const target = e.target as HTMLTextAreaElement
+                  target.style.height = 'auto'
+                  target.style.height =
+                    Math.min(target.scrollHeight, 200) + 'px'
+                }}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === 'Enter' &&
+                    !e.shiftKey &&
+                    (input.trim() || attachedImages.length > 0)
+                  ) {
+                    e.preventDefault()
+                    handleSendMessage()
+                  }
+                }}
+              />
+
+              <div className="flex items-center gap-1 px-2 pb-2">
+                {/* Hidden file input */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+
+                {/* Image attachment button */}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isLoading}
+                  className="p-2 text-gray-400 hover:text-orange-500 disabled:text-gray-600 transition-colors focus:outline-none"
+                  title="Attach image"
+                >
+                  <ImagePlus className="w-5 h-5" />
+                </button>
+
+                {/* Mic / voice-input button */}
+                {micSupported && (
+                  <button
+                    onClick={() => void handleMicToggle()}
+                    disabled={isLoading || isTranscribing}
+                    className={`p-2 transition-colors focus:outline-none disabled:text-gray-600 ${
+                      isRecording
+                        ? 'text-red-500 hover:text-red-400 animate-pulse'
+                        : 'text-gray-400 hover:text-orange-500'
+                    }`}
+                    title={
+                      isRecording
+                        ? 'Stop and transcribe'
+                        : isTranscribing
+                          ? 'Transcribing…'
+                          : 'Record voice input'
+                    }
+                  >
+                    {isRecording ? (
+                      <Square className="w-5 h-5" />
+                    ) : (
+                      <Mic className="w-5 h-5" />
+                    )}
+                  </button>
+                )}
+
+                <div className="flex-1" />
+
+                <button
+                  onClick={handleSendMessage}
+                  disabled={
+                    (!input.trim() && attachedImages.length === 0) || isLoading
+                  }
+                  className="p-2 text-orange-500 hover:text-orange-400 disabled:text-gray-500 transition-colors focus:outline-none"
+                  title="Send"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </ChatInputArea>
+      </div>
+    </div>
+  )
+}
+
+export const Route = createFileRoute('/chat')({
+  component: ChatPage,
+})

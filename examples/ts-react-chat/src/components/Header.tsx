@@ -1,31 +1,8 @@
 import { Link } from '@tanstack/react-router'
 
 import { useState } from 'react'
-import {
-  Activity,
-  BadgeCheck,
-  Braces,
-  Code2,
-  Database,
-  FileAudio,
-  FileText,
-  Guitar,
-  Home,
-  Image,
-  Layers,
-  LayoutGrid,
-  Menu,
-  MessageSquare,
-  Mic,
-  Music,
-  PauseCircle,
-  Plug,
-  RefreshCw,
-  Server,
-  Sparkles,
-  Video,
-  X,
-} from 'lucide-react'
+import { Home, Menu, X } from 'lucide-react'
+import { NAV_SECTIONS } from '@/lib/nav-items'
 
 export default function Header() {
   const [isOpen, setIsOpen] = useState(false)
@@ -81,303 +58,31 @@ export default function Header() {
             <span className="font-medium">Home</span>
           </Link>
 
-          <hr className="border-gray-700 my-2" />
+          {NAV_SECTIONS.map((section) => (
+            <div key={section.label}>
+              <hr className="border-gray-700 my-2" />
 
-          <p className="text-xs text-gray-500 uppercase tracking-wider px-3 pt-2 pb-1">
-            Generations
-          </p>
+              <p className="text-xs text-gray-500 uppercase tracking-wider px-3 pt-2 pb-1">
+                {section.label}
+              </p>
 
-          <Link
-            to="/generation-hooks"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
-            }}
-          >
-            <Activity size={20} />
-            <span className="font-medium">Generation Hooks</span>
-          </Link>
-
-          <Link
-            to="/generations/image"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
-            }}
-          >
-            <Image size={20} />
-            <span className="font-medium">Image Generation</span>
-          </Link>
-
-          <Link
-            to="/generations/speech"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
-            }}
-          >
-            <FileAudio size={20} />
-            <span className="font-medium">Text-to-Speech</span>
-          </Link>
-
-          <Link
-            to="/generations/audio"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
-            }}
-          >
-            <Music size={20} />
-            <span className="font-medium">Audio Generation</span>
-          </Link>
-
-          <Link
-            to="/generations/transcription"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
-            }}
-          >
-            <Mic size={20} />
-            <span className="font-medium">Transcription</span>
-          </Link>
-
-          <Link
-            to="/generations/summarize"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
-            }}
-          >
-            <FileText size={20} />
-            <span className="font-medium">Summarization</span>
-          </Link>
-
-          <Link
-            to="/generations/video"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
-            }}
-          >
-            <Video size={20} />
-            <span className="font-medium">Video Generation</span>
-          </Link>
-
-          <Link
-            to="/generations/structured-output"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
-            }}
-          >
-            <Braces size={20} />
-            <span className="font-medium">Structured Output</span>
-          </Link>
-
-          <Link
-            to="/generations/structured-chat"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
-            }}
-          >
-            <Braces size={20} />
-            <span className="font-medium">Structured Chat</span>
-          </Link>
-
-          <hr className="border-gray-700 my-2" />
-
-          <p className="text-xs text-gray-500 uppercase tracking-wider px-3 pt-2 pb-1">
-            Examples
-          </p>
-
-          <Link
-            to="/example/guitars"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
-            }}
-          >
-            <Guitar size={20} />
-            <span className="font-medium">Guitar Demo</span>
-          </Link>
-
-          <Link
-            to="/typesafe-tools"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
-            }}
-          >
-            <Code2 size={20} />
-            <span className="font-medium">Type-Safe Tools</span>
-          </Link>
-
-          <Link
-            to="/threads"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-2"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-2',
-            }}
-          >
-            <MessageSquare size={20} />
-            <span className="font-medium">Persistent Chats</span>
-          </Link>
-
-          <Link
-            to="/queueing"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-2"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-2',
-            }}
-          >
-            <Layers size={20} />
-            <span className="font-medium">Queueing Strategies</span>
-          </Link>
-
-          <Link
-            to="/example/runtime-context"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
-            }}
-          >
-            <BadgeCheck size={20} />
-            <span className="font-medium">Runtime Context</span>
-          </Link>
-
-          <Link
-            to="/realtime"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-2"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-2',
-            }}
-          >
-            <Mic size={20} />
-            <span className="font-medium">Voice Chat (Realtime)</span>
-          </Link>
-
-          <Link
-            to="/server-fn-chat"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-2"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-2',
-            }}
-          >
-            <Server size={20} />
-            <span className="font-medium">Server Function Chat</span>
-          </Link>
-
-          <Link
-            to="/resumable"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-2"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-2',
-            }}
-          >
-            <RefreshCw size={20} />
-            <span className="font-medium">Resumable Streams</span>
-          </Link>
-
-          <Link
-            to="/persistent-chat"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-2"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-2',
-            }}
-          >
-            <Database size={20} />
-            <span className="font-medium">Persistent Chat</span>
-          </Link>
-
-          <Link
-            to="/interrupts"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-2"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-2',
-            }}
-          >
-            <PauseCircle size={20} />
-            <span className="font-medium">Interrupts Lab</span>
-          </Link>
-
-          <Link
-            to="/mcp-demo"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-2"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-2',
-            }}
-          >
-            <Plug size={20} />
-            <span className="font-medium">MCP Servers</span>
-          </Link>
-
-          <Link
-            to="/mcp-apps"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-2"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-2',
-            }}
-          >
-            <LayoutGrid size={20} />
-            <span className="font-medium">MCP Apps</span>
-          </Link>
-
-          <Link
-            to="/capability-demo"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-2"
-            activeProps={{
-              className:
-                'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-2',
-            }}
-          >
-            <Sparkles size={20} />
-            <span className="font-medium">Capability Middleware</span>
-          </Link>
+              {section.items.map((item) => (
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  onClick={() => setIsOpen(false)}
+                  className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-1"
+                  activeProps={{
+                    className:
+                      'flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-1',
+                  }}
+                >
+                  <item.icon size={20} />
+                  <span className="font-medium">{item.label}</span>
+                </Link>
+              ))}
+            </div>
+          ))}
         </nav>
       </aside>
     </>

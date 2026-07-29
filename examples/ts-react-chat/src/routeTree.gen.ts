@@ -24,6 +24,7 @@ import { Route as InterruptsRouteImport } from './routes/interrupts'
 import { Route as ImageToolReproRouteImport } from './routes/image-tool-repro'
 import { Route as ImageGenRouteImport } from './routes/image-gen'
 import { Route as GenerationHooksRouteImport } from './routes/generation-hooks'
+import { Route as ChatRouteImport } from './routes/chat'
 import { Route as CapabilityDemoRouteImport } from './routes/capability-demo'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as GenerationsVideoRouteImport } from './routes/generations.video'
@@ -135,6 +136,11 @@ const ImageGenRoute = ImageGenRouteImport.update({
 const GenerationHooksRoute = GenerationHooksRouteImport.update({
   id: '/generation-hooks',
   path: '/generation-hooks',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChatRoute = ChatRouteImport.update({
+  id: '/chat',
+  path: '/chat',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CapabilityDemoRoute = CapabilityDemoRouteImport.update({
@@ -329,6 +335,7 @@ const ApiGenerateAudioRoute = ApiGenerateAudioRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/capability-demo': typeof CapabilityDemoRoute
+  '/chat': typeof ChatRoute
   '/generation-hooks': typeof GenerationHooksRoute
   '/image-gen': typeof ImageGenRoute
   '/image-tool-repro': typeof ImageToolReproRoute
@@ -383,6 +390,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/capability-demo': typeof CapabilityDemoRoute
+  '/chat': typeof ChatRoute
   '/generation-hooks': typeof GenerationHooksRoute
   '/image-gen': typeof ImageGenRoute
   '/image-tool-repro': typeof ImageToolReproRoute
@@ -438,6 +446,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/capability-demo': typeof CapabilityDemoRoute
+  '/chat': typeof ChatRoute
   '/generation-hooks': typeof GenerationHooksRoute
   '/image-gen': typeof ImageGenRoute
   '/image-tool-repro': typeof ImageToolReproRoute
@@ -494,6 +503,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/capability-demo'
+    | '/chat'
     | '/generation-hooks'
     | '/image-gen'
     | '/image-tool-repro'
@@ -548,6 +558,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/capability-demo'
+    | '/chat'
     | '/generation-hooks'
     | '/image-gen'
     | '/image-tool-repro'
@@ -602,6 +613,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/capability-demo'
+    | '/chat'
     | '/generation-hooks'
     | '/image-gen'
     | '/image-tool-repro'
@@ -657,6 +669,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   CapabilityDemoRoute: typeof CapabilityDemoRoute
+  ChatRoute: typeof ChatRoute
   GenerationHooksRoute: typeof GenerationHooksRoute
   ImageGenRoute: typeof ImageGenRoute
   ImageToolReproRoute: typeof ImageToolReproRoute
@@ -814,6 +827,13 @@ declare module '@tanstack/react-router' {
       path: '/generation-hooks'
       fullPath: '/generation-hooks'
       preLoaderRoute: typeof GenerationHooksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/chat': {
+      id: '/chat'
+      path: '/chat'
+      fullPath: '/chat'
+      preLoaderRoute: typeof ChatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/capability-demo': {
@@ -1081,6 +1101,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CapabilityDemoRoute: CapabilityDemoRoute,
+  ChatRoute: ChatRoute,
   GenerationHooksRoute: GenerationHooksRoute,
   ImageGenRoute: ImageGenRoute,
   ImageToolReproRoute: ImageToolReproRoute,

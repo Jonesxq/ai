@@ -3,8 +3,9 @@ import { createFileRoute } from '@tanstack/react-router'
 import { Send, Square, X, Zap } from 'lucide-react'
 import { fetchServerSentEvents, useChat } from '@tanstack/ai-react'
 import type { QueueConfig, QueuedMessage, UIMessage } from '@tanstack/ai-react'
-import type { ModelOption } from '@/lib/model-selection'
-import { DEFAULT_MODEL_OPTION, MODEL_OPTIONS } from '@/lib/model-selection'
+import type { ChatModelOption } from '@/lib/models'
+import { ChatModelSelect } from '@/components/ModelSelect'
+import { chatModelApi, DEFAULT_CHAT_MODEL } from '@/lib/models'
 
 /**
  * Showcase route for the client-side message queue.
@@ -162,12 +163,16 @@ function StrategyPanel({
 
 function QueueingPage() {
   const [selectedModel, setSelectedModel] =
-    useState<ModelOption>(DEFAULT_MODEL_OPTION)
+    useState<ChatModelOption>(DEFAULT_CHAT_MODEL)
   const [input, setInput] = useState('')
 
   const body = useMemo(
-    () => ({ provider: selectedModel.provider, model: selectedModel.model }),
-    [selectedModel.provider, selectedModel.model],
+    () => ({
+      provider: selectedModel.provider,
+      model: selectedModel.model,
+      api: chatModelApi(selectedModel),
+    }),
+    [selectedModel],
   )
 
   // One chat per strategy, called explicitly (fixed count, fixed order) so the
@@ -217,23 +222,10 @@ function QueueingPage() {
         </p>
         <div className="mt-3 max-w-sm">
           <label className="mb-1 block text-xs text-gray-400">Model</label>
-          <select
-            value={MODEL_OPTIONS.findIndex(
-              (option) =>
-                option.provider === selectedModel.provider &&
-                option.model === selectedModel.model,
-            )}
-            onChange={(event) =>
-              setSelectedModel(MODEL_OPTIONS[parseInt(event.target.value)])
-            }
-            className="w-full rounded-lg border border-orange-500/20 bg-gray-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50"
-          >
-            {MODEL_OPTIONS.map((option, index) => (
-              <option key={index} value={index}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+          <ChatModelSelect
+            value={selectedModel}
+            onChange={setSelectedModel}
+          />
         </div>
       </div>
 

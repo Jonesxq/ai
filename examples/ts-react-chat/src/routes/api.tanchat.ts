@@ -7,7 +7,7 @@ import {
   mergeAgentTools,
   toServerSentEventsResponse,
 } from '@tanstack/ai'
-import { openaiText } from '@tanstack/ai-openai'
+import { openaiChatCompletions, openaiText } from '@tanstack/ai-openai'
 import { ollamaText } from '@tanstack/ai-ollama'
 import { anthropicText } from '@tanstack/ai-anthropic'
 import { geminiText } from '@tanstack/ai-gemini'
@@ -17,6 +17,7 @@ import { grokText } from '@tanstack/ai-grok'
 import { groqText } from '@tanstack/ai-groq'
 import { bedrockText } from '@tanstack/ai-bedrock'
 import type { AnyTextAdapter, ChatMiddleware } from '@tanstack/ai'
+import type { ChatProvider } from '@/lib/models'
 import {
   addToCartToolDef,
   addToWishListToolDef,
@@ -32,16 +33,9 @@ import {
   type ServerRuntimeContext,
 } from '@/lib/guitar-tools'
 
-type Provider =
-  | 'openai'
-  | 'anthropic'
-  | 'gemini'
-  | 'gemini-interactions'
-  | 'ollama'
-  | 'grok'
-  | 'groq'
-  | 'openrouter'
-  | 'bedrock'
+// The allowlisted providers — derived from the central chat-model registry
+// (`@/lib/models`), so a provider appears here exactly when it has models.
+type Provider = ChatProvider
 
 const SYSTEM_PROMPT = `You are a helpful assistant for a guitar store.
 
@@ -219,6 +213,13 @@ export const Route = createFileRoute('/api/tanchat')({
           typeof params.forwardedProps.model === 'string'
             ? params.forwardedProps.model
             : 'gpt-4o'
+        // API flavor for providers with more than one wire API ('interactions'
+        // for Google, 'chat-completions' for OpenAI; default = Responses /
+        // stateless generateContent).
+        const api: string | undefined =
+          typeof params.forwardedProps.api === 'string'
+            ? params.forwardedProps.api
+            : undefined
         const runtimeContext: ServerRuntimeContext = {
           userId: readForwardedString(
             params.forwardedProps.runtimeUserId,
@@ -271,30 +272,34 @@ export const Route = createFileRoute('/api/tanchat')({
                 },
               },
             }),
-          gemini: () =>
+          google: () =>
+            api === 'interactions'
+              ? createChatOptions({
+                  adapter: geminiTextInteractions(
+                    (model ||
+                      'gemini-3.1-pro-preview') as 'gemini-3.1-pro-preview',
+                  ),
+                  modelOptions: {
+                    previous_interaction_id: previousInteractionId,
+                    store: true,
+                  },
+                })
+              : createChatOptions({
+                  adapter: geminiText(
+                    (model ||
+                      'gemini-3.1-pro-preview') as 'gemini-3.1-pro-preview',
+                  ),
+                  modelOptions: {
+                    thinkingConfig: {
+                      includeThoughts: true,
+                      thinkingBudget: 100,
+                    },
+                  },
+                }),
+          spacexai: () =>
             createChatOptions({
-              adapter: geminiText(
-                (model || 'gemini-3.1-pro-preview') as 'gemini-3.1-pro-preview',
-              ),
-              modelOptions: {
-                thinkingConfig: {
-                  includeThoughts: true,
-                  thinkingBudget: 100,
-                },
-              },
-            }),
-          'gemini-interactions': () =>
-            createChatOptions({
-              adapter: geminiTextInteractions(
-                (model || 'gemini-3.1-pro-preview') as 'gemini-3.1-pro-preview',
-              ),
-              modelOptions: {
-                previous_interaction_id: previousInteractionId,
-                store: true,
-              },
-            }),
-          grok: () =>
-            createChatOptions({
+              // Grok is SpaceXAI's model brand; the adapter package predates
+              // the rename (still `@tanstack/ai-grok`, XAI_API_KEY).
               adapter: grokText(
                 (model || 'grok-build-0.1') as 'grok-build-0.1',
               ),
@@ -329,13 +334,20 @@ export const Route = createFileRoute('/api/tanchat')({
               modelOptions: { think: 'low', options: { top_k: 1 } },
             }),
           openai: () =>
-            createChatOptions({
-              adapter: openaiText((model || 'gpt-5.2') as 'gpt-5.2'),
-              modelOptions: {
-                prompt_cache_key: 'user-session-12345',
-                prompt_cache_retention: '24h',
-              },
-            }),
+            api === 'chat-completions'
+              ? createChatOptions({
+                  adapter: openaiChatCompletions(
+                    (model || 'gpt-5.2') as 'gpt-5.2',
+                  ),
+                })
+              : createChatOptions({
+                  // Default OpenAI flavor: the Responses API (`openaiText`).
+                  adapter: openaiText((model || 'gpt-5.2') as 'gpt-5.2'),
+                  modelOptions: {
+                    prompt_cache_key: 'user-session-12345',
+                    prompt_cache_retention: '24h',
+                  },
+                }),
         }
 
         try {
@@ -347,9 +359,9 @@ export const Route = createFileRoute('/api/tanchat')({
           // Get typed adapter options using createChatOptions pattern
           const options = adapterConfig[provider]()
 
-          // All providers (including gemini-interactions) get the full
+          // All providers (including the Interactions API) get the full
           // server-tool set merged with whatever client-side tools the
-          // request brought. Historical note: gemini-interactions used
+          // request brought. Historical note: the Interactions API used
           // to be excluded because of an assumed `anyOf` incompatibility
           // and an empty-`required: []` rejection. The first turned out
           // to be a non-issue against the live API and the second is now

@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
+import { ImageIcon, Loader2, Plus, Shuffle, X } from 'lucide-react'
 import { useGenerateImage } from '@tanstack/ai-react'
-import type { UseGenerateImageReturn } from '@tanstack/ai-react'
 import { fetchServerSentEvents } from '@tanstack/ai-client'
-import { resolveMediaPrompt } from '@tanstack/ai'
-import { generateImageFn, generateImageStreamFn } from '../lib/server-fns'
+import { IMAGE_MODEL_GROUPS, IMAGE_MODELS } from '@/lib/models'
+import { GroupedModelSelect } from '@/components/ModelSelect'
+import { getRandomImagePrompt } from '@/lib/prompts'
+import { readMediaFile, toImagePart } from '@/lib/media'
 import {
   generationRunPersistence,
   rememberRunLabel,
@@ -12,13 +14,14 @@ import {
 } from '../lib/generation-runs'
 import { GenerationRunHistory } from '../components/GenerationRunHistory'
 import type { ImageGenerationResult } from '@tanstack/ai'
+import type { MediaPrompt } from '@tanstack/ai/client'
+import type { ImageModel, ImageModelId } from '@/lib/models'
+import type { AttachedMedia } from '@/lib/media'
 
-// Every variant persists its lightweight resume snapshot (run identity,
-// status, errors, result metadata — never image bytes) and records finished
-// runs into the shared history list. The client namespaces its record under
-// `generation:<id>` and reads it back on mount, repainting the hook's normal
-// `status` / `result` / `error` fields so the last run's outcome survives a
-// full page reload.
+// Each model card persists its lightweight resume snapshot (run identity,
+// status, errors, result metadata — never image bytes) under its own hook id
+// (`image:<model id>`), so a reload repaints every card's last run. Terminal
+// snapshots also feed the shared run history below the form.
 const imagePersistence = generationRunPersistence('image')
 
 // Capture what was generated so clicking the history entry can show it.
@@ -35,173 +38,98 @@ function recordImagePreview(result: ImageGenerationResult) {
   )
 }
 
-function StreamingImageGeneration() {
-  const [prompt, setPrompt] = useState('')
-  const [numberOfImages, setNumberOfImages] = useState(1)
-
-  const hookReturn = useGenerateImage({
-    id: 'image:streaming',
-    connection: fetchServerSentEvents('/api/generate/image'),
-    persistence: imagePersistence,
-    onResult: recordImagePreview,
-  })
-
-  return (
-    <ImageGenerationUI
-      {...hookReturn}
-      prompt={prompt}
-      setPrompt={setPrompt}
-      numberOfImages={numberOfImages}
-      setNumberOfImages={setNumberOfImages}
-    />
-  )
+function getImageSrc(image: { url?: string; b64Json?: string }): string {
+  if (image.url) return image.url
+  if (image.b64Json) return `data:image/png;base64,${image.b64Json}`
+  return ''
 }
 
-function DirectImageGeneration() {
-  const [prompt, setPrompt] = useState('')
-  const [numberOfImages, setNumberOfImages] = useState(1)
-
-  const hookReturn = useGenerateImage({
-    id: 'image:direct',
-    fetcher: (input) =>
-      generateImageFn({
-        data: { ...input, prompt: resolveMediaPrompt(input.prompt).text },
-      }),
-    persistence: imagePersistence,
-    onResult: recordImagePreview,
-  })
-
-  return (
-    <ImageGenerationUI
-      {...hookReturn}
-      prompt={prompt}
-      setPrompt={setPrompt}
-      numberOfImages={numberOfImages}
-      setNumberOfImages={setNumberOfImages}
-    />
-  )
-}
-
-function ServerFnImageGeneration() {
-  const [prompt, setPrompt] = useState('')
-  const [numberOfImages, setNumberOfImages] = useState(1)
-
-  const hookReturn = useGenerateImage({
-    id: 'image:server-fn',
-    fetcher: (input) =>
-      generateImageStreamFn({
-        data: { ...input, prompt: resolveMediaPrompt(input.prompt).text },
-      }),
-    persistence: imagePersistence,
-    onResult: recordImagePreview,
-  })
-
-  return (
-    <ImageGenerationUI
-      {...hookReturn}
-      prompt={prompt}
-      setPrompt={setPrompt}
-      numberOfImages={numberOfImages}
-      setNumberOfImages={setNumberOfImages}
-    />
-  )
-}
-
-function ImageGenerationUI({
-  prompt,
-  setPrompt,
-  numberOfImages,
-  setNumberOfImages,
-  generate,
-  result,
-  isLoading,
-  error,
-  reset,
-}: UseGenerateImageReturn & {
+interface ImageRunRequest {
+  /** Incremented on every Generate click, so re-runs with an unchanged prompt still trigger. */
+  key: number
   prompt: string
-  setPrompt: (v: string) => void
-  numberOfImages: number
-  setNumberOfImages: (v: number) => void
+}
+
+/**
+ * One model's generation card. The hook drives the whole lifecycle over SSE
+ * (`/api/generate/image` dispatches to this card's model); the parent only
+ * tells the card *when* to run via the `run` request.
+ */
+function ImageModelCard({
+  model,
+  run,
+  referenceImages,
+  showName,
+  onBusyChange,
+}: {
+  model: ImageModel
+  run: ImageRunRequest | null
+  referenceImages: Array<AttachedMedia>
+  showName: boolean
+  onBusyChange: (modelId: ImageModelId, busy: boolean) => void
 }) {
-  const handleGenerate = () => {
-    if (!prompt.trim()) return
-    rememberRunLabel('image', prompt)
-    generate({ prompt: prompt.trim(), numberOfImages })
-  }
+  const { generate, result, isLoading, error, reset } = useGenerateImage({
+    id: `image:${model.id}`,
+    connection: fetchServerSentEvents('/api/generate/image'),
+    body: { model: model.id },
+    persistence: imagePersistence,
+    onResult: (r) => {
+      recordImagePreview(r)
+      onBusyChange(model.id, false)
+    },
+    onError: () => onBusyChange(model.id, false),
+  })
+
+  const lastRunKey = useRef(0)
+  useEffect(() => {
+    if (!run || run.key === lastRunKey.current) return
+    lastRunKey.current = run.key
+    // With reference images attached, send an ordered parts array (text
+    // first, then one image part per attachment). Only image-capable models
+    // accept image inputs — unsupported models surface a server error.
+    const prompt: MediaPrompt =
+      referenceImages.length === 0
+        ? run.prompt
+        : [
+            { type: 'text', content: run.prompt },
+            ...referenceImages.map((image) => toImagePart(image)),
+          ]
+    onBusyChange(model.id, true)
+    void generate({ prompt })
+  }, [run, referenceImages, generate, model.id, onBusyChange])
+
+  if (!isLoading && !error && !result) return null
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-3">
-        <label className="text-sm text-gray-400">Prompt</label>
-        <textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Describe the image you want to generate..."
-          className="w-full rounded-lg border border-orange-500/20 bg-gray-800/50 px-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 resize-none"
-          rows={3}
-          disabled={isLoading}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && prompt.trim()) {
-              e.preventDefault()
-              handleGenerate()
-            }
-          }}
-        />
-      </div>
-
-      <div className="space-y-3">
-        <label className="text-sm text-gray-400">Number of Images</label>
-        <div className="flex gap-2">
-          {[1, 2, 3, 4].map((n) => (
-            <button
-              key={n}
-              onClick={() => setNumberOfImages(n)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                numberOfImages === n
-                  ? 'bg-orange-600 text-white'
-                  : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-              }`}
-            >
-              {n}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex gap-3">
-        <button
-          onClick={handleGenerate}
-          disabled={!prompt.trim() || isLoading}
-          className="px-6 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg text-sm font-medium transition-colors"
-        >
-          {isLoading ? 'Generating...' : 'Generate Image'}
-        </button>
-        {result && (
-          <button
-            onClick={reset}
-            className="px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium transition-colors"
-          >
-            Clear
-          </button>
-        )}
-      </div>
-
-      {error && (
-        <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
-          <p className="text-red-400 text-sm">{error.message}</p>
+    <div className="space-y-2">
+      {showName && (
+        <h4 className="text-sm font-medium text-gray-300">{model.name}</h4>
+      )}
+      {isLoading && (
+        <div className="flex items-center gap-2 p-4 bg-gray-800 rounded-lg border border-gray-700">
+          <Loader2 className="w-5 h-5 animate-spin text-orange-400" />
+          <span className="text-gray-400">Generating...</span>
         </div>
       )}
-
-      {result && (
-        <div className="space-y-4">
-          {result.images.map((img, i) => (
-            <img
-              key={i}
-              src={img.url || `data:image/png;base64,${img.b64Json}`}
-              alt={img.revisedPrompt || prompt}
-              className="w-full rounded-lg border border-gray-700"
-            />
-          ))}
+      {error && (
+        <div className="flex items-start justify-between gap-2 p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400">
+          <span className="text-sm">{error.message}</span>
+          <button
+            onClick={reset}
+            className="text-red-300 hover:text-red-200"
+            aria-label="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+      {!isLoading && result && result.images.length > 0 && (
+        <div className="rounded-lg overflow-hidden border border-gray-700">
+          <img
+            src={getImageSrc(result.images[0]!)}
+            alt={`Generated by ${model.name}`}
+            className="w-full h-auto"
+          />
         </div>
       )}
     </div>
@@ -209,64 +137,202 @@ function ImageGenerationUI({
 }
 
 function ImageGenerationPage() {
-  const [mode, setMode] = useState<'streaming' | 'direct' | 'server-fn'>(
-    'streaming',
+  const [prompt, setPrompt] = useState('')
+  const [selectedModel, setSelectedModel] = useState<ImageModelId | 'all'>(
+    'all',
   )
+  const [referenceImages, setReferenceImages] = useState<Array<AttachedMedia>>(
+    [],
+  )
+  const [run, setRun] = useState<ImageRunRequest | null>(null)
+  const [busyModels, setBusyModels] = useState<ReadonlySet<ImageModelId>>(
+    new Set(),
+  )
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const visibleModels =
+    selectedModel === 'all'
+      ? IMAGE_MODELS
+      : IMAGE_MODELS.filter((model) => model.id === selectedModel)
+  const currentModel = IMAGE_MODELS.find((model) => model.id === selectedModel)
+  const isGenerating = busyModels.size > 0
+
+  const handleBusyChange = (modelId: ImageModelId, busy: boolean) => {
+    setBusyModels((prev) => {
+      const next = new Set(prev)
+      if (busy) {
+        next.add(modelId)
+      } else {
+        next.delete(modelId)
+      }
+      return next
+    })
+  }
+
+  const handleImageSelect = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const files = Array.from(e.target.files ?? [])
+    if (fileInputRef.current) fileInputRef.current.value = ''
+    if (files.length === 0) return
+    const attached = await Promise.all(files.map((file) => readMediaFile(file)))
+    setReferenceImages((prev) => [...prev, ...attached])
+  }
+
+  const removeImage = (id: string) => {
+    setReferenceImages((prev) => prev.filter((image) => image.id !== id))
+  }
+
+  const handleGenerate = () => {
+    const trimmed = prompt.trim()
+    if (!trimmed || isGenerating) return
+    rememberRunLabel('image', trimmed)
+    setRun((prev) => ({ key: (prev?.key ?? 0) + 1, prompt: trimmed }))
+  }
 
   return (
     <div className="flex flex-col h-[calc(100vh-72px)] bg-gray-900 text-white">
       <div className="border-b border-orange-500/20 bg-gray-800 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-semibold">Image Generation</h2>
-            <p className="text-sm text-gray-400 mt-1">
-              Generate images using OpenAI's image models
-            </p>
-          </div>
-          <div className="flex gap-1 bg-gray-900/50 rounded-lg p-1">
-            <button
-              onClick={() => setMode('streaming')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                mode === 'streaming'
-                  ? 'bg-orange-600 text-white'
-                  : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              Streaming
-            </button>
-            <button
-              onClick={() => setMode('direct')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                mode === 'direct'
-                  ? 'bg-orange-600 text-white'
-                  : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              Direct
-            </button>
-            <button
-              onClick={() => setMode('server-fn')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                mode === 'server-fn'
-                  ? 'bg-orange-600 text-white'
-                  : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              Server Fn
-            </button>
-          </div>
-        </div>
+        <h2 className="text-xl font-semibold">Image Generation</h2>
+        <p className="text-sm text-gray-400 mt-1">
+          Generate images across fal.ai, Gemini, and xAI models — pick one, or
+          run them all side by side
+        </p>
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-2xl mx-auto">
-          {mode === 'streaming' ? (
-            <StreamingImageGeneration key="streaming" />
-          ) : mode === 'direct' ? (
-            <DirectImageGeneration key="direct" />
-          ) : (
-            <ServerFnImageGeneration key="server-fn" />
-          )}
+        <div className="max-w-2xl mx-auto space-y-6">
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Model
+              </label>
+              <GroupedModelSelect
+                groups={IMAGE_MODEL_GROUPS}
+                value={selectedModel}
+                onChange={setSelectedModel}
+                includeAll
+                disabled={isGenerating}
+              />
+              {currentModel && (
+                <p className="mt-1 text-xs text-gray-500">
+                  {currentModel.description}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-gray-300">
+                  Prompt
+                </label>
+                <button
+                  onClick={() => setPrompt(getRandomImagePrompt())}
+                  disabled={isGenerating}
+                  className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-orange-400 hover:text-orange-300 bg-orange-500/10 hover:bg-orange-500/20 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Shuffle className="w-3.5 h-3.5" />
+                  Shuffle
+                </button>
+              </div>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Describe the image you want to generate..."
+                className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 focus:border-transparent resize-none"
+                rows={3}
+                disabled={isGenerating}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && prompt.trim()) {
+                    e.preventDefault()
+                    handleGenerate()
+                  }
+                }}
+              />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-gray-300">
+                  Reference Images
+                </label>
+                <span className="text-xs text-gray-500">
+                  Supported by Gemini multimodal models only
+                  (gemini-3.1-flash-image-preview, gemini-3-pro-image-preview)
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {referenceImages.map((image) => (
+                  <div
+                    key={image.id}
+                    className="relative w-20 h-20 rounded-lg overflow-hidden border border-gray-700"
+                  >
+                    <img
+                      src={image.dataUrl}
+                      alt={image.name}
+                      className="w-full h-full object-cover"
+                    />
+                    <button
+                      onClick={() => removeImage(image.id)}
+                      disabled={isGenerating}
+                      className="absolute top-1 right-1 p-0.5 bg-gray-900/80 hover:bg-gray-800 rounded-full text-white disabled:opacity-50"
+                      aria-label={`Remove ${image.name}`}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isGenerating}
+                  className="w-20 h-20 flex flex-col items-center justify-center gap-1 border-2 border-dashed border-gray-600 hover:border-gray-500 rounded-lg text-gray-400 hover:text-gray-300 transition-colors disabled:opacity-50"
+                >
+                  <Plus className="w-5 h-5" />
+                  <span className="text-xs">Add</span>
+                </button>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleImageSelect}
+                className="hidden"
+              />
+            </div>
+
+            <button
+              onClick={handleGenerate}
+              disabled={isGenerating || !prompt.trim()}
+              className="w-full px-6 py-3 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+            >
+              {isGenerating ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <ImageIcon className="w-5 h-5" />
+                  Generate Image{selectedModel === 'all' ? 's' : ''}
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="space-y-6">
+            {visibleModels.map((model) => (
+              <ImageModelCard
+                key={model.id}
+                model={model}
+                run={run}
+                referenceImages={referenceImages}
+                showName={selectedModel === 'all'}
+                onBusyChange={handleBusyChange}
+              />
+            ))}
+          </div>
+
           <GenerationRunHistory kind="image" />
         </div>
       </div>

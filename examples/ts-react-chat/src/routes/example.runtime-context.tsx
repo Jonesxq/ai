@@ -21,8 +21,9 @@ import {
   inspectServerRuntimeContextToolDef,
   type ClientRuntimeContext,
 } from '@/lib/guitar-tools'
-import { DEFAULT_MODEL_OPTION, MODEL_OPTIONS } from '@/lib/model-selection'
-import type { ModelOption } from '@/lib/model-selection'
+import { chatModelApi, DEFAULT_CHAT_MODEL } from '@/lib/models'
+import type { ChatModelOption } from '@/lib/models'
+import { ChatModelSelect } from '@/components/ModelSelect'
 
 type RuntimeProfile = ClientRuntimeContext & {
   label: string
@@ -245,7 +246,7 @@ function RuntimeMessages({
 
 function RuntimeContextExamplePage() {
   const [selectedModel, setSelectedModel] =
-    useState<ModelOption>(DEFAULT_MODEL_OPTION)
+    useState<ChatModelOption>(DEFAULT_CHAT_MODEL)
   const [runtimeProfileIndex, setRuntimeProfileIndex] = useState(0)
   const [input, setInput] = useState('')
   const runtimeProfile =
@@ -268,6 +269,7 @@ function RuntimeContextExamplePage() {
     () => ({
       provider: selectedModel.provider,
       model: selectedModel.model,
+      api: chatModelApi(selectedModel),
       runtimeUserId: runtimeContext.userId,
       runtimeTenantId: runtimeContext.tenantId,
       runtimeLoyaltyTier: runtimeContext.loyaltyTier,
@@ -278,8 +280,7 @@ function RuntimeContextExamplePage() {
       runtimeContext.preferredStyle,
       runtimeContext.tenantId,
       runtimeContext.userId,
-      selectedModel.model,
-      selectedModel.provider,
+      selectedModel,
     ],
   )
   const { messages, sendMessage, isLoading, error, stop } = useChat({
@@ -310,25 +311,12 @@ function RuntimeContextExamplePage() {
             <label className="mb-2 block text-sm text-gray-400">
               Select Model:
             </label>
-            <select
-              value={MODEL_OPTIONS.findIndex(
-                (option) =>
-                  option.provider === selectedModel.provider &&
-                  option.model === selectedModel.model,
-              )}
-              onChange={(event) => {
-                const option = MODEL_OPTIONS[Number(event.target.value)]
-                setSelectedModel(option)
-              }}
+            <ChatModelSelect
+              value={selectedModel}
+              onChange={setSelectedModel}
               disabled={isLoading}
               className="w-full rounded-lg border border-orange-500/20 bg-gray-950 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-orange-500/50 disabled:opacity-50"
-            >
-              {MODEL_OPTIONS.map((option, index) => (
-                <option key={option.label} value={index}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+            />
           </div>
 
           <div>
