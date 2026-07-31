@@ -1,5 +1,25 @@
 # @tanstack/ai-openai
 
+## 0.17.2
+
+### Patch Changes
+
+- [#1011](https://github.com/TanStack/ai/pull/1011) [`996a980`](https://github.com/TanStack/ai/commit/996a9802b4dd1edf5301ad10a88c5e994367d7a5) - Drop `temperature` / `top_p` for OpenAI reasoning models so they don't 400.
+
+  The o-series and the GPT-5 reasoning family reject `temperature`/`top_p`
+  (`400 Unsupported parameter`), but a caller — or the summarize adapter's
+  low-temperature default — has no way to know a given model does. The OpenAI text
+  adapter now strips both for reasoning models (matched by
+  `openAIModelRejectsSamplingParams`, which covers `o*` and non-`*-chat-latest`
+  `gpt-5*` plus `codex-mini-latest`). Stripping only ever averts a guaranteed 400,
+  so it never changes an otherwise-valid request. This fixes `summarize` (and chat)
+  on `gpt-5.5` and other reasoning models.
+
+- Updated dependencies [[`3301398`](https://github.com/TanStack/ai/commit/330139878958fc5c5c167a69347c884fa35b792a), [`996a980`](https://github.com/TanStack/ai/commit/996a9802b4dd1edf5301ad10a88c5e994367d7a5), [`996a980`](https://github.com/TanStack/ai/commit/996a9802b4dd1edf5301ad10a88c5e994367d7a5), [`996a980`](https://github.com/TanStack/ai/commit/996a9802b4dd1edf5301ad10a88c5e994367d7a5), [`996a980`](https://github.com/TanStack/ai/commit/996a9802b4dd1edf5301ad10a88c5e994367d7a5), [`4ab149f`](https://github.com/TanStack/ai/commit/4ab149fd46a1cf55691266cdd118fdc9999c0b2a), [`996a980`](https://github.com/TanStack/ai/commit/996a9802b4dd1edf5301ad10a88c5e994367d7a5), [`4ab149f`](https://github.com/TanStack/ai/commit/4ab149fd46a1cf55691266cdd118fdc9999c0b2a), [`996a980`](https://github.com/TanStack/ai/commit/996a9802b4dd1edf5301ad10a88c5e994367d7a5), [`996a980`](https://github.com/TanStack/ai/commit/996a9802b4dd1edf5301ad10a88c5e994367d7a5), [`996a980`](https://github.com/TanStack/ai/commit/996a9802b4dd1edf5301ad10a88c5e994367d7a5), [`3301398`](https://github.com/TanStack/ai/commit/330139878958fc5c5c167a69347c884fa35b792a), [`3301398`](https://github.com/TanStack/ai/commit/330139878958fc5c5c167a69347c884fa35b792a), [`4ab149f`](https://github.com/TanStack/ai/commit/4ab149fd46a1cf55691266cdd118fdc9999c0b2a), [`478a4da`](https://github.com/TanStack/ai/commit/478a4da3756e0de09548f2902da3b45748c27b52), [`347b61b`](https://github.com/TanStack/ai/commit/347b61bc788bb816bbd12287c1a426ca7def00f4), [`4ab149f`](https://github.com/TanStack/ai/commit/4ab149fd46a1cf55691266cdd118fdc9999c0b2a), [`7c7aa09`](https://github.com/TanStack/ai/commit/7c7aa09a7402b45e6285ebc78a606131aec3e288), [`4ab149f`](https://github.com/TanStack/ai/commit/4ab149fd46a1cf55691266cdd118fdc9999c0b2a), [`996a980`](https://github.com/TanStack/ai/commit/996a9802b4dd1edf5301ad10a88c5e994367d7a5), [`4ce7600`](https://github.com/TanStack/ai/commit/4ce7600d5b543d4b7e3bd6d63cdf5ecf91cdeeaa), [`4ab149f`](https://github.com/TanStack/ai/commit/4ab149fd46a1cf55691266cdd118fdc9999c0b2a), [`996a980`](https://github.com/TanStack/ai/commit/996a9802b4dd1edf5301ad10a88c5e994367d7a5)]:
+  - @tanstack/ai@0.43.0
+  - @tanstack/ai-utils@0.4.0
+  - @tanstack/openai-base@0.9.10
+
 ## 0.17.1
 
 ### Patch Changes
@@ -21,7 +41,9 @@
   ```ts
   createOpenaiImage('gpt-image-1', apiKey, { allowUrlFetch: true })
   createOpenaiVideo('sora-2', apiKey, { allowUrlFetch: true })
-  createGeminiVideo('veo-3.1-generate-preview', apiKey, { allowUrlFetch: true })
+  createGeminiVideo('veo-3.1-generate-preview', apiKey, {
+    allowUrlFetch: true,
+  })
   ```
 
   Migration: if you passed HTTP(S) URL image inputs to these adapters, either fetch the bytes yourself and pass a `data:` URI, pass a `gs://` reference (Veo), or set `allowUrlFetch: true`.

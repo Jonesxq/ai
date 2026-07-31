@@ -1,5 +1,12 @@
 # @tanstack/ai-sandbox-docker
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [[`4ab149f`](https://github.com/TanStack/ai/commit/4ab149fd46a1cf55691266cdd118fdc9999c0b2a), [`4ab149f`](https://github.com/TanStack/ai/commit/4ab149fd46a1cf55691266cdd118fdc9999c0b2a)]:
+  - @tanstack/ai-sandbox@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes
