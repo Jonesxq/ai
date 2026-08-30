@@ -321,7 +321,6 @@ function DevtoolsGenerationHooksRoute() {
 
 function CustomGenerationIdentityProbe() {
   useGeneration({
-    id: 'generation-hooks:useGeneration',
     fetcher: async () => ({ text: 'custom result' }),
     devtools: CUSTOM_GENERATION_DEVTOOLS,
   })
