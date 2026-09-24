@@ -871,6 +871,83 @@ describe('Anthropic adapter option mapping', () => {
     expect(opus48.supportsCombinedToolsAndSchema()).toBe(true)
   })
 
+  it('native combined mode (#605): replays a prior structured turn as its own assistant message', async () => {
+    // Issue #613. Combined mode puts the JSON on a `structured-output` part,
+    // not a text part, so the assistant turn survives into the next request
+    // only if that part is re-serialized as content. When it isn't, the turn
+    // goes out empty, `mergeConsecutiveSameRoleMessages` filters it, and the
+    // two user turns left adjacent are merged into one.
+    const firstRecipe = JSON.stringify({
+      title: 'Classic Spaghetti Pomodoro',
+      servings: 2,
+    })
+    const secondRecipe = JSON.stringify({
+      title: 'Vegan Spaghetti Pomodoro',
+      servings: 2,
+    })
+
+    const adapter = new AnthropicTextAdapter(
+      { apiKey: 'test-key' },
+      'claude-sonnet-4-5',
+    )
+    const RecipeSchema = z.object({
+      title: z.string(),
+      servings: z.number(),
+    })
+
+    mocks.betaMessagesCreate.mockResolvedValueOnce(
+      createTextStream(firstRecipe),
+    )
+
+    const firstMessages = [
+      { role: 'user' as const, content: 'pasta dinner for two' },
+    ]
+    const processor = new StreamProcessor({
+      initialMessages: firstMessages as unknown as Array<UIMessage>,
+    })
+    for await (const chunk of chat({
+      adapter,
+      messages: firstMessages,
+      outputSchema: RecipeSchema,
+      stream: true,
+    })) {
+      processor.processChunk(chunk)
+    }
+    processor.finalizeStream()
+
+    const afterTurn1 = processor.getMessages()
+    const assistant = afterTurn1.find((m) => m.role === 'assistant')
+    expect(assistant?.parts.map((p) => p.type)).toEqual(['structured-output'])
+
+    // Turn 2: replay the conversation plus a new user turn.
+    mocks.betaMessagesCreate.mockResolvedValueOnce(
+      createTextStream(secondRecipe),
+    )
+
+    for await (const _ of chat({
+      adapter,
+      messages: [...afterTurn1, { role: 'user', content: 'now make it vegan' }],
+      outputSchema: RecipeSchema,
+      stream: true,
+    })) {
+      // consume stream
+    }
+
+    expect(mocks.betaMessagesCreate).toHaveBeenCalledTimes(2)
+    const [secondPayload] = mocks.betaMessagesCreate.mock.calls[1]!
+    const replayed = secondPayload.messages as Array<{
+      role: string
+      content: unknown
+    }>
+
+    // Three distinct turns, not two user turns merged around a dropped one.
+    expect(replayed.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+    expect(JSON.stringify(replayed[0])).toContain('pasta dinner for two')
+    expect(JSON.stringify(replayed[1])).toContain('Classic Spaghetti Pomodoro')
+    expect(JSON.stringify(replayed[2])).toContain('now make it vegan')
+    expect(JSON.stringify(replayed[2])).not.toContain('pasta dinner for two')
+  })
+
   it('merges consecutive user messages when tool results precede a follow-up user message', async () => {
     // This is the core multi-turn bug: after a tool call + result, the next user message
     // creates consecutive role:'user' messages (tool_result as user + new user message).
