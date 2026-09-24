@@ -31,7 +31,7 @@ completed workspace data in your application persistence for reconstruction.
 | Vercel | `@tanstack/ai-sandbox-vercel` | microVM | Managed [Vercel Sandbox](https://vercel.com/docs/sandbox) microVMs; exposed-port domains, resume-by-id (persistent). Needs `VERCEL_TOKEN` + team/project. |
 | Sprites | `@tanstack/ai-sandbox-sprites` | stateful sandbox | Managed [Sprites](https://sprites.dev) (Fly.io) sandboxes; durable filesystem, in-place checkpoints, single proxied public-URL port, resume-by-id. Needs `SPRITES_API_KEY`. |
 | Upstash Box | `@tanstack/ai-sandbox-upstash-box` | cloud sandbox | Managed [Upstash Box](https://github.com/upstash/box) sandboxes; interactive processes over a WebSocket session (real pid, stdin, signals), native snapshots, preview URLs, resume-by-id. Needs `UPSTASH_BOX_API_KEY`. |
-| Blaxel | `@tanstack/ai-sandbox-blaxel` | cloud sandbox | Managed [Blaxel](https://blaxel.ai) sandboxes; durable filesystem, per-port preview URLs, native file watch, resume-by-id. Snapshot/fork remain disabled while the source-scoped private-preview semantics are unproven. Needs `BL_API_KEY` + `BL_WORKSPACE`. |
+| Blaxel | `@tanstack/ai-sandbox-blaxel` | cloud sandbox | Managed [Blaxel](https://blaxel.ai) sandboxes; durable filesystem, per-port preview URLs, native file watch, resume-by-id. Snapshot/fork remain disabled while the source-scoped private-preview semantics are unproven. Accepts `BL_API_KEY` + `BL_WORKSPACE` or SDK-resolved CLI or client credentials. |
 | E2B | `@tanstack/ai-sandbox-e2b` | microVM | Managed [E2B](https://e2b.dev) Firecracker sandboxes. Native snapshots and fork, preview URLs, writable stdin, process-group kill, resume-by-id (also wakes a paused sandbox). Needs `E2B_API_KEY`. |
 
 Most providers are their own package. `dockerSandbox()` and `sbxSandbox()` both
@@ -53,7 +53,7 @@ const microvm = sbxSandbox() // Docker Sandboxes microVM
 const daytona = daytonaSandbox({ apiKey: process.env.DAYTONA_API_KEY }) // managed cloud sandbox
 const vercel = vercelSandbox({ runtime: 'node24' }) // managed Vercel microVM
 const box = upstashBoxSandbox({ apiKey: process.env.UPSTASH_BOX_API_KEY }) // managed Upstash Box
-const blaxel = blaxelSandbox() // managed Blaxel sandbox; reads BL_API_KEY + BL_WORKSPACE
+const blaxel = blaxelSandbox() // managed Blaxel sandbox; uses API-key or CLI credentials
 const e2b = e2bSandbox() // managed E2B microVM; reads E2B_API_KEY
 ```
 
@@ -374,12 +374,7 @@ const blaxel = blaxelSandbox({
   `blaxel/base-image:latest`) and the size with `memory` (default 2048 MB). Set
   `region` (or `BL_REGION`) to choose a region and to silence the SDK's warning
   that it will become required.
-- **Auth / env:** needs `BL_API_KEY` and `BL_WORKSPACE`, either as constructor
-  options or environment variables. `@blaxel/core` authentication is
-  process-global, so use one Blaxel API key/workspace pair per Node.js process
-  and do not call `@blaxel/core.initialize()` again afterward. The provider
-  rejects a second pair at construction time instead of risking cross-workspace
-  requests.
+- **Auth / env:** Pass `apiKey` and `workspace` as constructor options, or set `BL_API_KEY` and `BL_WORKSPACE`. If you omit the API key, the provider uses the SDK CLI login or client credentials. A requested workspace must match those credentials. `@blaxel/core` authentication is process-global. The provider records the resolved workspace at construction and rejects a later provider that asks for a different workspace.
 - **Lifetime:** created sandboxes carry a `1h` TTL by default so an abandoned run
   cannot strand a paid sandbox. Override with `ttl`, or pass `ttl: null` to manage
   lifetime yourself.
@@ -394,8 +389,7 @@ const blaxel = blaxelSandbox({
   token-gated by default and the returned channel carries both the token and the
   ready-to-send `X-Blaxel-Preview-Token` header. Set `publicPreviews: true` for
   unauthenticated URLs.
-- **Files:** `fs.watch()` is native, so file-event and diff hooks work without
-  polling.
+- **Files:** `fs.watch()` is native, so file-event and diff hooks work without polling. `fs.lstat()` reports file, directory, and symlink metadata without following links; missing paths return `undefined`, while other errors propagate. Custom images must provide GNU `stat`.
 - **Process output:** stdout and stderr remain live-streamed through bounded
   remote capture pipelines. Concurrent stdout and stderr use labeled records on
   one transport stream, including across keepalive boundaries. Each stream has an 8 MiB total limit; exceeding it
@@ -522,7 +516,7 @@ merely slower while a wrong `follow` is a leak.
 | Vercel | `false` | The abort signal reaches only the HTTP request that STARTS a detached command, so the old `kill()` was a no-op. It now issues the SDK's server-side `Command.kill`, but whether that reaches a forked child (the follow command is a multi-statement shell, so `tail -f` is always a child) is unmeasured, needs Vercel credentials. |
 | Sprites | `true` (unverified) | Not a client-side detach: `kill()` issues a real server-side `POST /exec/<sessionId>/kill` before closing the socket. What that endpoint signals (process group or pid) is undocumented and unmeasured; needs `SPRITES_API_KEY`. |
 | Upstash Box | `true` | **Measured.** `kill()` sends an allowlisted signal (`TERM`/`KILL`/`INT`/`HUP`) that the box agent delivers to the process TREE server-side, so a forked child is signalled too. Verified against production: a spawned `sleep 5 && touch <marker>` was killed and the marker never appeared. Needs `UPSTASH_BOX_API_KEY`. |
-| Blaxel | `false` | The SDK issues a server-side process kill, but whether it terminates the shell's child process group is unmeasured. The shared live conformance suite is credential-gated on `BL_API_KEY` and `BL_WORKSPACE`. |
+| Blaxel | `true` | The provider reaps supervisor and child process groups, then waits for the remote reaper to finish. Credential-gated journal conformance verifies that cancellation leaves no active follower process. |
 | E2B | `true` | **Measured.** The SDK's own kill is a SIGKILL to the shell pid, and a backgrounded `( … ) & wait` child survived it. Every command therefore runs as a `setsid` group leader and `kill()` runs `kill -KILL -- -<pid>` inside the sandbox. The shared journal conformance kill case passes against a real sandbox. Needs `E2B_API_KEY`. |
 | Cloudflare | `false` | `kill()` is a no-op, and the caller's `AbortSignal` reaches neither `exec` nor `spawn`, because Workers RPC cannot serialize one. |
 
