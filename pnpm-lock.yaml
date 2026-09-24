@@ -3031,6 +3031,19 @@ importers:
         specifier: 4.1.10
         version: 4.1.10(vitest@4.1.11)
 
+  packages/ai-sandbox-boxd:
+    dependencies:
+      '@boxd-sh/sdk':
+        specifier: ^0.2.9
+        version: 0.2.10
+    devDependencies:
+      '@tanstack/ai-sandbox':
+        specifier: workspace:*
+        version: link:../ai-sandbox
+      '@vitest/coverage-v8':
+        specifier: 4.1.10
+        version: 4.1.10(vitest@4.1.11)
+
   packages/ai-sandbox-cloudflare:
     dependencies:
       '@cloudflare/sandbox':
@@ -4970,6 +4983,10 @@ packages:
   '@blaxel/core@0.3.11':
     resolution: {integrity: sha512-vkFMd3jVbC4zz8BQ5LuVw4BcK1KVVIgQTeHTG/1cGu9CAeaHined1WP68XRoxksXC+zGmCnMv619IuMGjQhkDw==}
     engines: {node: '>=18'}
+
+  '@boxd-sh/sdk@0.2.10':
+    resolution: {integrity: sha512-jfZFaI9w9r5VO/GaHwh98zWDZ6Zwv7M+Q3EaLQ1GdZn9xtlUvblxdjFrDiCtl06xduuE/xX+iSSWObswdJb17g==}
+    engines: {node: '>=20'}
 
   '@bufbuild/protobuf@1.10.1':
     resolution: {integrity: sha512-wJ8ReQbHxsAfXhrf9ixl0aYbZorRuOWpBNzm8pL8ftmSxQx/wnJD5Eg861NwJU/czy2VXFIebCeZnZrI9rktIQ==}
@@ -21018,6 +21035,11 @@ snapshots:
       - react-native-b4a
       - supports-color
       - utf-8-validate
+
+  '@boxd-sh/sdk@0.2.10':
+    dependencies:
+      '@bufbuild/protobuf': 2.15.0
+      '@grpc/grpc-js': 1.14.4
 
   '@bufbuild/protobuf@1.10.1': {}
 
