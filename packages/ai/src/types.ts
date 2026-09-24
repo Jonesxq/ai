@@ -239,8 +239,24 @@ export interface ContentPartUrlSource extends AGUIUrlSource {}
 /**
  * A provider-issued file handle (Files API). AG-UI `FileSource`: the handle
  * is opaque, do not fetch or parse it.
+ *
+ * The media is uploaded once via a `files` adapter (`openaiFiles()`,
+ * `anthropicFiles()`, `geminiFiles()`, `grokFiles()`, `falFiles()`) and
+ * referenced here by the returned handle instead of re-sending base64 or a
+ * public URL on each request. Only the provider that minted a handle can
+ * resolve it. Adapters that cannot consume file handles at all are rejected
+ * by the activity-layer preflight before mapping starts.
  */
-export interface ContentPartFileSource extends AGUIFileSource {}
+export interface ContentPartFileSource<
+  TProvider extends string = string,
+> extends AGUIFileSource {
+  /**
+   * The adapter name of the provider that issued the handle (`'openai'`,
+   * `'gemini'`, ...), the same id TanStack reports as the usage provider.
+   * When present, an adapter rejects a handle another provider issued.
+   */
+  provider?: TProvider
+}
 
 /**
  * Where a media part's bytes come from: inline data, a URL, or a provider
